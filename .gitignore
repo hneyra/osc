@@ -1,0 +1,33 @@
+# Java / Gradle
+.gradle/
+build/
+*.class
+*.jar
+!gradle-wrapper.jar
+out/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Node / frontend / Pulumi
+node_modules/
+dist/
+.pulumi/
+infrastructure/bin/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+*.env
+
+# Docker
+docker-compose.override.yml

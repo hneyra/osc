@@ -1,0 +1,20 @@
+{
+  "name": "osc-infrastructure",
+  "version": "1.0.0",
+  "description": "OSC Infrastructure as Code — Pulumi TypeScript",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/**/*.ts index.ts"
+  },
+  "dependencies": {
+    "@pulumi/pulumi": "^3.0.0",
+    "@pulumi/aws": "^6.0.0",
+    "@pulumi/docker": "^4.0.0",
+    "@pulumi/postgresql": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
