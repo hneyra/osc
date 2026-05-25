@@ -1,0 +1,43 @@
+# Build outputs
+**/build/
+**/bin/
+**/.gradle/
+
+# IDE files
+**/.idea/
+**/.vscode/
+**/*.iml
+**/*.iws
+**/*.ipr
+
+# OS files
+**/.DS_Store
+**/Thumbs.db
+
+# Test reports
+**/test-results/
+**/reports/
+
+# Frontend node_modules (not needed for backend build)
+frontend/node_modules/
+
+# Infrastructure (not needed for app build)
+infrastructure/node_modules/
+infrastructure/bin/
+
+# Git
+.git/
+.gitignore
+
+# Docker files themselves
+**/Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Docs
+docs/
+*.md
+
+# Environment files
+.env
+.env.*
