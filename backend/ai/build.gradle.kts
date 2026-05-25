@@ -1,5 +1,3 @@
-// Spring AI 2.x wired in Phase 6 (issue #7)
-// Skeleton: empty Java library that depends only on metadata-engine
 plugins {
     id("osc.java-conventions")
 }
@@ -7,4 +5,8 @@ plugins {
 dependencies {
     implementation(project(":backend:metadata-engine"))
     implementation("org.springframework.boot:spring-boot-autoconfigure")
+    implementation("com.fasterxml.jackson.core:jackson-databind")
+
+    testImplementation("org.mockito:mockito-core:5.15.2")
+    testImplementation("io.projectreactor:reactor-test")
 }
