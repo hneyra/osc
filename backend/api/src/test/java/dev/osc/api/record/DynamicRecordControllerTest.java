@@ -3,6 +3,8 @@ package dev.osc.api.record;
 import dev.osc.metadata.TenantContext;
 import dev.osc.persistence.*;
 import dev.osc.query.*;
+import dev.osc.security.FlsFilter;
+import dev.osc.security.PermissionChecker;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,6 +32,8 @@ class DynamicRecordControllerTest {
     @Mock QueryParser queryParser;
     @Mock QueryTranslator queryTranslator;
     @Mock QueryExecutor queryExecutor;
+    @Mock PermissionChecker permissionChecker;
+    @Mock FlsFilter flsFilter;
 
     DynamicRecordController controller;
 
@@ -39,7 +43,9 @@ class DynamicRecordControllerTest {
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        controller = new DynamicRecordController(persistenceService, queryParser, queryTranslator, queryExecutor);
+        controller = new DynamicRecordController(
+                persistenceService, queryParser, queryTranslator, queryExecutor,
+                permissionChecker, flsFilter);
     }
 
     @Test

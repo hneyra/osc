@@ -5,6 +5,10 @@ import dev.osc.persistence.DynamicPersistenceService;
 import dev.osc.persistence.ObjectNotFoundException;
 import dev.osc.persistence.PageRequest;
 import dev.osc.query.*;
+import dev.osc.security.FlsFilter;
+import dev.osc.security.PermissionChecker;
+import dev.osc.security.SecurityContext;
+import dev.osc.security.UserContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -37,15 +41,21 @@ public class DynamicRecordController {
     private final QueryParser queryParser;
     private final QueryTranslator queryTranslator;
     private final QueryExecutor queryExecutor;
+    private final PermissionChecker permissionChecker;
+    private final FlsFilter flsFilter;
 
     public DynamicRecordController(DynamicPersistenceService persistenceService,
                                     QueryParser queryParser,
                                     QueryTranslator queryTranslator,
-                                    QueryExecutor queryExecutor) {
+                                    QueryExecutor queryExecutor,
+                                    PermissionChecker permissionChecker,
+                                    FlsFilter flsFilter) {
         this.persistenceService = persistenceService;
         this.queryParser = queryParser;
         this.queryTranslator = queryTranslator;
         this.queryExecutor = queryExecutor;
+        this.permissionChecker = permissionChecker;
+        this.flsFilter = flsFilter;
     }
 
     // ── GET /{objectApiName} — list records ───────────────────────────────────
@@ -59,12 +69,26 @@ public class DynamicRecordController {
         int safeLimit = Math.min(limit, MAX_LIMIT);
         PageRequest page = new PageRequest(offset / Math.max(safeLimit, 1), safeLimit);
 
-        return persistenceService.listRecords(objectApiName, page)
-                .map(r -> recordToMap(r))
-                .collectList()
-                .map(rows -> new RecordResponse(rows, rows.size(), safeLimit, offset, objectApiName))
-                .onErrorMap(ObjectNotFoundException.class,
-                        ex -> new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage()));
+        return Mono.deferContextual(ctx -> {
+            UUID tenantId = UUID.fromString((String) ctx.get(TenantContext.TENANT_ID_KEY));
+            UserContext user = ctx.getOrDefault(SecurityContext.USER_CONTEXT_KEY, null);
+
+            Mono<Boolean> canRead = (user != null)
+                    ? permissionChecker.canRead(tenantId, user.userId(), objectApiName)
+                    : Mono.just(true);
+
+            return canRead.flatMap(allowed -> {
+                if (!allowed) return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN));
+                return persistenceService.listRecords(objectApiName, page)
+                        .map(this::recordToMap)
+                        .flatMap(record -> (user != null)
+                                ? flsFilter.apply(record, tenantId, user.userId(), objectApiName)
+                                : Mono.just(record))
+                        .collectList()
+                        .map(rows -> new RecordResponse(rows, rows.size(), safeLimit, offset, objectApiName));
+            }).onErrorMap(ObjectNotFoundException.class,
+                    ex -> new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage()));
+        });
     }
 
     // ── POST /{objectApiName} — create record ─────────────────────────────────
@@ -75,12 +99,23 @@ public class DynamicRecordController {
             @PathVariable String objectApiName,
             @RequestBody Map<String, Object> body) {
 
-        return persistenceService.createRecord(objectApiName, body)
-                .map(this::recordToMap)
-                .onErrorMap(ObjectNotFoundException.class,
-                        ex -> new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage()))
-                .onErrorMap(dev.osc.persistence.FieldValidationException.class,
-                        ex -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage()));
+        return Mono.deferContextual(ctx -> {
+            UUID tenantId = UUID.fromString((String) ctx.get(TenantContext.TENANT_ID_KEY));
+            UserContext user = ctx.getOrDefault(SecurityContext.USER_CONTEXT_KEY, null);
+
+            Mono<Boolean> canCreate = (user != null)
+                    ? permissionChecker.canCreate(tenantId, user.userId(), objectApiName)
+                    : Mono.just(true);
+
+            return canCreate.flatMap(allowed -> {
+                if (!allowed) return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN));
+                return persistenceService.createRecord(objectApiName, body)
+                        .map(this::recordToMap);
+            }).onErrorMap(ObjectNotFoundException.class,
+                    ex -> new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage()))
+              .onErrorMap(dev.osc.persistence.FieldValidationException.class,
+                    ex -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage()));
+        });
     }
 
     // ── GET /{objectApiName}/{id} — get by ID ─────────────────────────────────
@@ -90,9 +125,24 @@ public class DynamicRecordController {
             @PathVariable String objectApiName,
             @PathVariable UUID id) {
 
-        return persistenceService.getRecord(id)
-                .map(r -> ResponseEntity.ok(recordToMap(r)))
-                .defaultIfEmpty(ResponseEntity.notFound().build());
+        return Mono.deferContextual(ctx -> {
+            UUID tenantId = UUID.fromString((String) ctx.get(TenantContext.TENANT_ID_KEY));
+            UserContext user = ctx.getOrDefault(SecurityContext.USER_CONTEXT_KEY, null);
+
+            Mono<Boolean> canRead = (user != null)
+                    ? permissionChecker.canRead(tenantId, user.userId(), objectApiName)
+                    : Mono.just(true);
+
+            return canRead.flatMap(allowed -> {
+                if (!allowed) return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN));
+                return persistenceService.getRecord(id)
+                        .map(this::recordToMap)
+                        .flatMap(record -> (user != null)
+                                ? flsFilter.apply(record, tenantId, user.userId(), objectApiName)
+                                : Mono.just(record))
+                        .map(ResponseEntity::ok);
+            }).defaultIfEmpty(ResponseEntity.notFound().build());
+        });
     }
 
     // ── PATCH /{objectApiName}/{id} — update record ───────────────────────────
@@ -103,9 +153,21 @@ public class DynamicRecordController {
             @PathVariable UUID id,
             @RequestBody Map<String, Object> patch) {
 
-        return persistenceService.updateRecord(id, patch)
-                .map(this::recordToMap)
-                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND)));
+        return Mono.deferContextual(ctx -> {
+            UUID tenantId = UUID.fromString((String) ctx.get(TenantContext.TENANT_ID_KEY));
+            UserContext user = ctx.getOrDefault(SecurityContext.USER_CONTEXT_KEY, null);
+
+            Mono<Boolean> canEdit = (user != null)
+                    ? permissionChecker.canEdit(tenantId, user.userId(), objectApiName)
+                    : Mono.just(true);
+
+            return canEdit.flatMap(allowed -> {
+                if (!allowed) return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN));
+                return persistenceService.updateRecord(id, patch)
+                        .map(this::recordToMap)
+                        .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND)));
+            });
+        });
     }
 
     // ── DELETE /{objectApiName}/{id} — delete record ──────────────────────────
@@ -116,7 +178,19 @@ public class DynamicRecordController {
             @PathVariable String objectApiName,
             @PathVariable UUID id) {
 
-        return persistenceService.deleteRecord(id);
+        return Mono.deferContextual(ctx -> {
+            UUID tenantId = UUID.fromString((String) ctx.get(TenantContext.TENANT_ID_KEY));
+            UserContext user = ctx.getOrDefault(SecurityContext.USER_CONTEXT_KEY, null);
+
+            Mono<Boolean> canDelete = (user != null)
+                    ? permissionChecker.canDelete(tenantId, user.userId(), objectApiName)
+                    : Mono.just(true);
+
+            return canDelete.flatMap(allowed -> {
+                if (!allowed) return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN));
+                return persistenceService.deleteRecord(id);
+            });
+        });
     }
 
     // ── POST /{objectApiName}/query — SOQL-like query ─────────────────────────
@@ -128,29 +202,44 @@ public class DynamicRecordController {
 
         return Mono.deferContextual(ctx -> {
             UUID tenantId = UUID.fromString((String) ctx.get(TenantContext.TENANT_ID_KEY));
-            SelectQuery ast;
-            try {
-                ast = queryParser.parse(request.query());
-            } catch (ParseException ex) {
-                return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage()));
-            }
+            UserContext user = ctx.getOrDefault(SecurityContext.USER_CONTEXT_KEY, null);
 
-            return queryTranslator.translate(ast, tenantId, Set.of())
-                    .flatMap(translated ->
-                            queryExecutor.execute(translated).collectList()
-                                    .zipWith(queryExecutor.count(translated))
-                                    .map(tuple -> new RecordResponse(
-                                            tuple.getT1(),
-                                            tuple.getT2(),
-                                            ast.limit() != null ? ast.limit() : DEFAULT_LIMIT,
-                                            ast.offset() != null ? ast.offset() : 0,
-                                            objectApiName
-                                    ))
-                    )
-                    .onErrorMap(ObjectNotFoundException.class,
-                            ex -> new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage()))
-                    .onErrorMap(FieldNotFoundException.class,
-                            ex -> new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage()));
+            Mono<Boolean> canRead = (user != null)
+                    ? permissionChecker.canRead(tenantId, user.userId(), objectApiName)
+                    : Mono.just(true);
+
+            return canRead.flatMap(allowed -> {
+                if (!allowed) return Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN));
+
+                SelectQuery ast;
+                try {
+                    ast = queryParser.parse(request.query());
+                } catch (ParseException ex) {
+                    return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage()));
+                }
+
+                Mono<Set<String>> allowedFieldsMono = (user != null)
+                        ? permissionChecker.allowedReadFields(tenantId, user.userId(), objectApiName)
+                        : Mono.just(Set.of());
+
+                return allowedFieldsMono.flatMap(allowedFields ->
+                        queryTranslator.translate(ast, tenantId, allowedFields)
+                                .flatMap(translated ->
+                                        queryExecutor.execute(translated).collectList()
+                                                .zipWith(queryExecutor.count(translated))
+                                                .map(tuple -> new RecordResponse(
+                                                        tuple.getT1(),
+                                                        tuple.getT2(),
+                                                        ast.limit() != null ? ast.limit() : DEFAULT_LIMIT,
+                                                        ast.offset() != null ? ast.offset() : 0,
+                                                        objectApiName
+                                                ))
+                                )
+                );
+            }).onErrorMap(ObjectNotFoundException.class,
+                    ex -> new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage()))
+              .onErrorMap(FieldNotFoundException.class,
+                    ex -> new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage()));
         });
     }
 
