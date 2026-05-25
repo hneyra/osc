@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osc.dev/schemas/metadata-field",
+  "title": "FieldDefinition",
+  "description": "Schema for a field definition within an ObjectDefinition.",
+  "type": "object",
+  "required": ["api_name", "label", "field_type", "storage_kind"],
+  "additionalProperties": false,
+  "properties": {
+    "id":           { "type": "string", "format": "uuid" },
+    "tenant_id":    { "type": "string", "format": "uuid" },
+    "object_id":    { "type": "string", "format": "uuid" },
+    "api_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(__c)?$",
+      "description": "API-safe name. Custom fields end with __c."
+    },
+    "label":        { "type": "string", "minLength": 1 },
+    "field_type": {
+      "type": "string",
+      "enum": [
+        "TEXT", "TEXTAREA", "NUMBER", "CURRENCY", "PERCENT",
+        "DATE", "DATETIME", "TIME", "BOOLEAN",
+        "PICKLIST", "MULTIPICKLIST",
+        "LOOKUP", "MASTER_DETAIL",
+        "EMAIL", "URL", "PHONE",
+        "AUTO_NUMBER", "FORMULA"
+      ]
+    },
+    "storage_kind": { "type": "string", "enum": ["COLUMN", "JSONB"] },
+    "storage_key":  { "type": "string" },
+    "is_required":  { "type": "boolean", "default": false },
+    "is_custom":    { "type": "boolean", "default": false },
+    "config": {
+      "type": "object",
+      "description": "Field-type-specific configuration.",
+      "properties": {
+        "picklistValues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "string" },
+              "label": { "type": "string" },
+              "isDefault": { "type": "boolean" }
+            }
+          }
+        },
+        "referenceTo":  { "type": "string", "description": "Target object api_name for LOOKUP/MASTER_DETAIL." },
+        "formula":      { "type": "string", "description": "Formula expression for FORMULA fields." },
+        "precision":    { "type": "integer", "minimum": 0 },
+        "scale":        { "type": "integer", "minimum": 0 }
+      }
+    },
+    "created_at":   { "type": "string", "format": "date-time" },
+    "updated_at":   { "type": "string", "format": "date-time" }
+  },
+  "if": { "properties": { "field_type": { "enum": ["PICKLIST", "MULTIPICKLIST"] } } },
+  "then": {
+    "required": ["config"],
+    "properties": {
+      "config": { "required": ["picklistValues"] }
+    }
+  }
+}

@@ -26,6 +26,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
         exclude(group = "org.junit.vintage", module = "junit-vintage-engine")
     }
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("io.projectreactor:reactor-test")
     testImplementation("com.tngtech.archunit:archunit-junit5:1.4.0")
 }

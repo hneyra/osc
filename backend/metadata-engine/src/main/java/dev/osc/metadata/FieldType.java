@@ -1,0 +1,10 @@
+package dev.osc.metadata;
+
+public enum FieldType {
+    TEXT, TEXTAREA, NUMBER, CURRENCY, PERCENT,
+    DATE, DATETIME, TIME, BOOLEAN,
+    PICKLIST, MULTIPICKLIST,
+    LOOKUP, MASTER_DETAIL,
+    EMAIL, URL, PHONE,
+    AUTO_NUMBER, FORMULA
+}
