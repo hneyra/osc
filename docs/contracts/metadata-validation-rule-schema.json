@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osc.dev/schemas/metadata-validation-rule",
+  "title": "ValidationRule",
+  "description": "Schema for a declarative validation rule attached to an object.",
+  "type": "object",
+  "required": ["api_name", "condition_dsl", "error_message"],
+  "additionalProperties": false,
+  "properties": {
+    "id":            { "type": "string", "format": "uuid" },
+    "tenant_id":     { "type": "string", "format": "uuid" },
+    "object_id":     { "type": "string", "format": "uuid" },
+    "api_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "description": "Unique name for this rule within the object."
+    },
+    "condition_dsl": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Expression in the OSC DSL that evaluates to a boolean. If TRUE, the record is INVALID."
+    },
+    "error_message": {
+      "type": "string",
+      "minLength": 1,
+      "description": "User-facing error message shown when the rule fires."
+    },
+    "is_active":  { "type": "boolean", "default": true },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

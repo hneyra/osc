@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osc.dev/schemas/metadata-layout",
+  "title": "LayoutDefinition",
+  "description": "Schema for a page layout definition attached to an object.",
+  "type": "object",
+  "required": ["api_name", "layout_type", "definition"],
+  "additionalProperties": false,
+  "properties": {
+    "id":          { "type": "string", "format": "uuid" },
+    "tenant_id":   { "type": "string", "format": "uuid" },
+    "object_id":   { "type": "string", "format": "uuid" },
+    "api_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "layout_type": {
+      "type": "string",
+      "enum": ["DETAIL", "EDIT", "COMPACT"],
+      "description": "DETAIL = read view, EDIT = create/edit form, COMPACT = list-row."
+    },
+    "is_default":  { "type": "boolean", "default": false },
+    "definition": {
+      "type": "object",
+      "required": ["sections"],
+      "additionalProperties": false,
+      "properties": {
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["label", "columns"],
+            "additionalProperties": false,
+            "properties": {
+              "label":   { "type": "string" },
+              "columns": {
+                "type": "integer",
+                "enum": [1, 2],
+                "description": "Number of columns in this section (1 or 2)."
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["api_name"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "api_name":  { "type": "string" },
+                    "read_only": { "type": "boolean", "default": false },
+                    "span":      { "type": "integer", "enum": [1, 2], "default": 1 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}
