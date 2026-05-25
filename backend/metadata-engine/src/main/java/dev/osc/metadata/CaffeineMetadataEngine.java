@@ -2,6 +2,7 @@ package dev.osc.metadata;
 
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import dev.osc.metadata.performance.FieldAccessCounter;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -24,10 +25,12 @@ import java.util.UUID;
 public class CaffeineMetadataEngine implements MetadataEngine {
 
     private final MetadataRepository repository;
+    private final FieldAccessCounter fieldAccessCounter;
     private final AsyncLoadingCache<ObjectCacheKey, Optional<ObjectDefinition>> objectCache;
 
-    public CaffeineMetadataEngine(MetadataRepository repository) {
+    public CaffeineMetadataEngine(MetadataRepository repository, FieldAccessCounter fieldAccessCounter) {
         this.repository = repository;
+        this.fieldAccessCounter = fieldAccessCounter;
         this.objectCache = Caffeine.newBuilder()
                 .maximumSize(10_000)
                 .expireAfterWrite(Duration.ofMinutes(10))
@@ -53,6 +56,11 @@ public class CaffeineMetadataEngine implements MetadataEngine {
     public Mono<Void> invalidate(UUID tenantId, String apiName) {
         objectCache.synchronous().invalidate(new ObjectCacheKey(tenantId, apiName));
         return Mono.empty();
+    }
+
+    @Override
+    public void recordFieldAccess(UUID tenantId, String objectApiName, String fieldApiName) {
+        fieldAccessCounter.record(tenantId, objectApiName, fieldApiName);
     }
 
     private record ObjectCacheKey(UUID tenantId, String apiName) {}

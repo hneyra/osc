@@ -19,4 +19,10 @@ public interface MetadataEngine {
 
     /** Evicts the cached entry so the next read re-fetches from the repository. */
     Mono<Void> invalidate(UUID tenantId, String apiName);
+
+    /**
+     * Records a field access event for hot-field promotion analysis.
+     * Implementations may delegate to an in-memory counter or other store.
+     */
+    void recordFieldAccess(UUID tenantId, String objectApiName, String fieldApiName);
 }

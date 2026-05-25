@@ -1,5 +1,6 @@
 package dev.osc.metadata;
 
+import dev.osc.metadata.performance.FieldAccessCounter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -27,7 +28,7 @@ class CaffeineMetadataEngineTest {
 
     @BeforeEach
     void setUp() {
-        engine = new CaffeineMetadataEngine(repository);
+        engine = new CaffeineMetadataEngine(repository, new FieldAccessCounter());
     }
 
     // ── findObject ──────────────────────────────────────────────────────────
