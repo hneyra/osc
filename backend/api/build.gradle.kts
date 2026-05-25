@@ -16,6 +16,10 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springdoc:springdoc-openapi-starter-webflux-ui:2.8.9")
 
+    // AWS SDK — Secrets Manager integration (#60)
+    implementation("software.amazon.awssdk:secretsmanager:2.26.0")
+    implementation("software.amazon.awssdk:sts:2.26.0")
+
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "outDir": "bin",
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "sourceMap": true,
+    "experimentalDecorators": true,
+    "pretty": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "baseUrl": "..",
+    "paths": {
+      "@pulumi/pulumi": ["../node_modules/@pulumi/pulumi"],
+      "@pulumi/aws": ["../node_modules/@pulumi/aws"]
+    }
+  },
+  "files": ["index.ts"]
+}
