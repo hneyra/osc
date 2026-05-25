@@ -18,4 +18,11 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
+  endpoint:
+    metrics:
+      enabled: true
+
+osc:
+  rate-limit:
+    requests-per-minute: 1000
