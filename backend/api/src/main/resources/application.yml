@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: osc
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5432/osc
+    username: osc
+    password: osc_dev_password
+  flyway:
+    url: jdbc:postgresql://localhost:5432/osc
+    user: osc
+    password: osc_dev_password
+    locations: classpath:db/migration
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
