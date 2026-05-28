@@ -1,251 +1,941 @@
-# OSC — Detailed Technical Architecture
+# OSC — Architecture Reference
 
-## 1. Stack Details
+> **Audience:** developers and AI agents (Claude Code).
+> **Purpose:** Visual and narrative reference for every architectural layer. Read `docs/PROJECT.md` for the *why* behind decisions; read this document for the *how* and *what*.
+> **Living document:** update diagrams and prose whenever a decision changes (create/reference the ADR first).
 
-### 1.1 Backend
+---
 
-- **Java 25**: Uses Virtual Threads, sealed classes, pattern matching, structured concurrency.
-- **Spring Boot 4.x**: Auto-configuration, actuator, DevTools.
-- **Spring WebFlux**: Netty-based reactive HTTP server. All endpoints return `Mono<ResponseEntity<T>>` or `Flux<T>`.
-- **R2DBC (io.r2dbc:r2dbc-postgresql)**: Reactive, non-blocking PostgreSQL driver. All database operations return `Mono` or `Flux`.
-- **Spring AI 2 M6**: AI model abstraction; used only as a productivity layer, never on the critical data path.
-- **Flyway**: Database migrations. Reactive-compatible (synchronous migration at startup before reactive context is active).
-- **Caffeine**: In-process metadata cache with reactive wrappers (`AsyncLoadingCache`).
+## Table of Contents
 
-### 1.2 Build System
+1. [System Overview](#1-system-overview)
+2. [Module Map](#2-module-map)
+3. [The Two Planes: Metadata vs Data](#3-the-two-planes-metadata-vs-data)
+4. [Request Lifecycle (end-to-end)](#4-request-lifecycle-end-to-end)
+5. [Multi-tenancy Model](#5-multi-tenancy-model)
+6. [Metadata Engine](#6-metadata-engine)
+7. [Dynamic Persistence Layer](#7-dynamic-persistence-layer)
+8. [Query Engine](#8-query-engine)
+9. [Security Model (Defense in Depth)](#9-security-model-defense-in-depth)
+10. [Automation Engine](#10-automation-engine)
+11. [AI Layer (Spring AI)](#11-ai-layer-spring-ai)
+12. [Frontend Renderer Architecture](#12-frontend-renderer-architecture)
+13. [Integration Layer (Webhooks & Outbox)](#13-integration-layer-webhooks--outbox)
+14. [Database Schema (ER Diagram)](#14-database-schema-er-diagram)
+15. [Reactive Programming Model](#15-reactive-programming-model)
+16. [Infrastructure Topology](#16-infrastructure-topology)
+17. [Implementation Phases at a Glance](#17-implementation-phases-at-a-glance)
 
-Gradle multi-project build with Kotlin DSL:
+---
 
-```
-osc/
-├── settings.gradle.kts          # includes all subprojects
-├── build.gradle.kts             # root conventions
-├── gradle/
-│   └── libs.versions.toml       # version catalog
-├── backend/
-│   ├── metadata-engine/
-│   │   └── build.gradle.kts
-│   ├── persistence/
-│   │   └── build.gradle.kts
-│   ├── query-engine/
-│   │   └── build.gradle.kts
-│   ├── automation/
-│   │   └── build.gradle.kts
-│   ├── security/
-│   │   └── build.gradle.kts
-│   ├── api/
-│   │   └── build.gradle.kts
-│   ├── ai/
-│   │   └── build.gradle.kts
-│   └── integrations/
-│       └── build.gradle.kts
-├── frontend/
-│   ├── design-system/
-│   ├── renderer/
-│   ├── admin/
-│   └── runtime/
-└── infrastructure/              # Pulumi TypeScript
-```
+## 1. System Overview
 
-### 1.3 Database
+OSC is a **metadata-driven, multi-tenant business application engine** (PaaS/SaaS). Tenants configure objects, fields, validations, automations, and layouts at runtime — no code deployment required. The platform is the runtime interpreter of that configuration.
 
-PostgreSQL 16+ with:
-- **Row-Level Security (RLS)**: Enforced per table, per tenant.
-- **JSONB**: Flexible storage for custom fields, GIN-indexed.
-- **GIN indexes**: On `data jsonb_path_ops` for efficient JSONB queries.
-- **UUID primary keys**: `gen_random_uuid()`.
+```mermaid
+graph TB
+    subgraph Clients
+        Browser["Browser\n(React SPA)"]
+        ExternalAPI["External Client\n(REST API)"]
+        AdminUI["Admin UI\n(Setup & Config)"]
+    end
 
-### 1.4 Infrastructure
+    subgraph OSC["OSC Platform"]
+        Gateway["API Gateway\n(Spring WebFlux)"]
 
-Pulumi TypeScript in `infrastructure/`. References existing services from `hneyra/iaac`. Stacks: `dev`, `prod`.
+        subgraph Core["Core Engine"]
+            MetaEng["Metadata Engine\n(cache + load)"]
+            QueryEng["Query Engine\n(SOQL → SQL)"]
+            PersistLayer["Dynamic Persistence Layer\n(R2DBC + JSONB)"]
+            AutomationEng["Automation Engine\n(rules + flows)"]
+            SecurityLayer["Security Layer\n(JWT + FLS + RLS)"]
+        end
 
-## 2. Reactive Programming Model
+        subgraph AI["AI Layer (off critical path)"]
+            SpringAI["Spring AI 2 M6\n(NL → metadata / query)"]
+        end
 
-### 2.1 Rules
+        subgraph Async["Async / Integrations"]
+            Outbox["Outbox Worker\n(events + webhooks)"]
+        end
+    end
 
-- **Never block**: No `Mono.block()`, `Flux.toStream()`, or any blocking I/O on the event loop.
-- **Virtual threads**: Spring Boot 4 + Java 25 virtual threads for CPU-bound work that cannot be reactive.
-- **R2DBC everywhere**: All database interactions use `DatabaseClient` or R2DBC repositories.
-- **Context propagation**: `tenant_id` propagated via Reactor `Context`, not ThreadLocal.
+    subgraph Data["Data Store"]
+        PG["PostgreSQL 16+\n(RLS · JSONB · GIN)"]
+        Cache["Caffeine Cache\n(metadata)"]
+    end
 
-### 2.2 Tenant Context in Reactive Pipelines
+    subgraph Infra["Infrastructure (Pulumi TS)"]
+        Container["Container Service"]
+        Secrets["Secrets Manager"]
+        Observability["Observability Stack"]
+    end
 
-```java
-// Setting tenant context at request boundary
-Mono<T> withTenant(String tenantId, Mono<T> operation) {
-    return operation.contextWrite(ctx -> ctx.put(TENANT_KEY, tenantId));
-}
+    Browser --> Gateway
+    ExternalAPI --> Gateway
+    AdminUI --> Gateway
 
-// Retrieving in downstream operations
-Mono<String> currentTenant() {
-    return Mono.deferContextual(ctx -> Mono.just(ctx.get(TENANT_KEY)));
-}
+    Gateway --> SecurityLayer
+    SecurityLayer --> MetaEng
+    SecurityLayer --> QueryEng
+    SecurityLayer --> AutomationEng
+    MetaEng --> Cache
+    MetaEng --> PG
+    QueryEng --> PersistLayer
+    AutomationEng --> PersistLayer
+    PersistLayer --> PG
+    Outbox --> PG
 
-// Setting PostgreSQL session variable (R2DBC)
-Mono<Void> setTenantSession(Connection conn, String tenantId) {
-    return Mono.from(conn.createStatement("SET LOCAL app.current_tenant = $1")
-        .bind("$1", tenantId)
-        .execute())
-        .then();
-}
-```
+    SpringAI -.->|proposal only, never direct write| MetaEng
+    SpringAI -.->|translated query, subject to FLS| QueryEng
 
-## 3. Metadata Engine
-
-### 3.1 Responsibility
-
-Loads, caches, and invalidates metadata for all tenants. This is the most read-intensive component.
-
-### 3.2 Caching Strategy
-
-```java
-// Async Caffeine cache with reactive loader
-AsyncLoadingCache<MetadataKey, ObjectDefinition> cache = Caffeine.newBuilder()
-    .maximumSize(10_000)
-    .expireAfterWrite(Duration.ofMinutes(10))
-    .buildAsync(key -> loadFromDb(key).toFuture());
+    OSC --> Infra
 ```
 
-Cache invalidation: when metadata is written, publish an invalidation event (outbox pattern). All nodes flush their local cache entry.
+**Key principle:** the AI layer is **never on the critical path** of a data operation. The engine is deterministic; AI is a productivity layer on top.
 
-### 3.3 Metadata Key
+---
 
-`MetadataKey = (tenant_id, api_name)` for objects; `(tenant_id, object_id, api_name)` for fields.
+## 2. Module Map
 
-## 4. Dynamic Persistence Layer
+The repository is a **Gradle multi-project monorepo**. Each backend module has a single responsibility.
 
-### 4.1 Storage Strategy
+```mermaid
+graph LR
+    subgraph backend["backend/ (Gradle modules)"]
+        MetadataEngine["metadata-engine\nLoad · cache · invalidate\nObjectDefinition / FieldDefinition"]
+        Persistence["persistence\nFlyway migrations\nDynamic CRUD via R2DBC"]
+        QueryEngine["query-engine\nSOQL-like parser\nSQL translation + FLS filter"]
+        Automation["automation\nDSL expression evaluator\nUserCodeExecutor port\nOutbox publisher"]
+        Security["security\nJWT validation\nTenant context injection\nFLS / RLS filters"]
+        API["api\nREST endpoints (autogenerated)\nOpenAPI spec"]
+        AI["ai\nSpring AI integration\nNL → metadata proposal\nNL → query DSL"]
+        Integrations["integrations\nWebhook delivery\nOutbox worker\nRetry + HMAC"]
+    end
 
-| Field category | Storage |
-|---|---|
-| System fields | Real columns (`id`, `tenant_id`, `created_at`, `updated_at`, `owner_id`, `name`) |
-| Core/common custom fields | JSONB `data` column |
-| Hot fields (promoted) | Real columns added via Flyway migration (no dynamic DDL) |
+    subgraph frontend["frontend/"]
+        DesignSystem["design-system\n~30 base components"]
+        Renderer["renderer\nLayoutRenderer\nFieldRenderer\nListViewRenderer"]
+        Admin["admin\nSetup UI (objects, fields,\nlayouts, automations)"]
+        Runtime["runtime\nApp shell for end-users"]
+    end
 
-### 4.2 R2DBC JSONB Access
+    subgraph infrastructure["infrastructure/"]
+        Pulumi["Pulumi TypeScript\ndev + prod stacks"]
+    end
 
-```java
-// Writing JSONB field
-DatabaseClient.create(connectionFactory)
-    .sql("UPDATE record SET data = data || $1::jsonb WHERE id = $2 AND tenant_id = $3")
-    .bind("$1", Json.of(objectMapper.writeValueAsString(fieldUpdates)))
-    .bind("$2", recordId)
-    .bind("$3", tenantId)
-    .fetch().rowsUpdated();
+    API --> Security
+    API --> MetadataEngine
+    API --> QueryEngine
+    API --> Automation
+    QueryEngine --> Persistence
+    Automation --> Persistence
+    Security --> MetadataEngine
+    AI --> MetadataEngine
+    AI --> QueryEngine
+    Integrations --> Automation
 
-// Reading JSONB field
-.sql("SELECT data->>'due_date__c' AS due_date FROM record WHERE ...")
+    Renderer --> DesignSystem
+    Admin --> DesignSystem
+    Runtime --> Renderer
 ```
 
-### 4.3 No Dynamic DDL
+**Dependency rule:** modules flow downward. `api` → `security` → `metadata-engine` → `persistence`. No upward or circular dependencies.
 
-The system never issues `CREATE TABLE`, `ALTER TABLE`, or `CREATE INDEX` at runtime. All schema changes go through versioned Flyway migrations. Custom fields always go to JSONB until manually promoted by an operator via a Flyway migration.
+---
 
-## 5. Query Engine
+## 3. The Two Planes: Metadata vs Data
 
-### 5.1 Input / Output
+Everything in OSC is built on the separation of **what a record type *is*** (metadata) from **the records themselves** (data).
 
-- Input: SOQL-like query string (e.g., `SELECT name, due_date__c FROM Project__c WHERE status__c = 'OPEN' ORDER BY created_at DESC LIMIT 50`)
-- Output: `Flux<Map<String, Object>>` — reactive stream of typed records.
+```mermaid
+graph TB
+    subgraph MetaPlane["Metadata Plane (definition)"]
+        direction LR
+        ObjDef["ObjectDefinition\nProject__c, Account…"]
+        FieldDef["FieldDefinition\nname, due_date__c…"]
+        LayoutDef["LayoutDefinition\nwhich fields, in what order"]
+        ValidationDef["ValidationRule\nDSL expression + error msg"]
+        AutomationDef["AutomationDefinition\ntrigger + actions"]
+        PermDef["PermissionSet/Profile\nobject + field + record access"]
+    end
 
-### 5.2 Security Constraints
+    subgraph DataPlane["Data Plane (records)"]
+        direction LR
+        Record["record table\nid · tenant_id · object_id\nname · owner_id\ndata JSONB"]
+    end
 
-1. **Always validate** object/field names against metadata (rejects unknown names).
-2. **Always enforce** tenant filter — query gets injected `AND tenant_id = $tenant` regardless of user input.
-3. **Always use** R2DBC parameterized bindings — never string concatenation.
-4. **FLS check** — fields the user has no access to are removed from SELECT before execution.
+    ObjDef -->|shapes| Record
+    FieldDef -->|maps to data keys| Record
+    ValidationDef -->|evaluated before insert/update| Record
+    AutomationDef -->|triggers on change| Record
+    PermDef -->|gates access to| Record
 
-### 5.3 Translation Example
-
+    MetaPlane -->|cached in| Cache["Caffeine AsyncLoadingCache"]
+    Cache -->|invalidated on| MetaWrite["Metadata write event"]
 ```
-Input:  SELECT name, due_date__c FROM Project__c WHERE status__c = 'OPEN'
 
-Output: SELECT r.name, r.data->>'due_date__c' AS "due_date__c"
-        FROM record r
-        WHERE r.tenant_id = $1
-          AND r.object_id = $2
-          AND r.data->>'status__c' = $3
+**For AI agents:** when generating code that touches records, always load the `ObjectDefinition` from `MetadataEngine` first. Never hardcode field names or table names beyond `record`, `md_object`, `md_field`.
+
+---
+
+## 4. Request Lifecycle (end-to-end)
+
+This is the most important flow to understand. Every record mutation goes through every layer.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant WebFlux as Spring WebFlux<br/>(Netty)
+    participant Sec as Security Layer
+    participant Meta as Metadata Engine
+    participant Auto as Automation Engine
+    participant Query as Query Engine
+    participant R2DBC as R2DBC / PostgreSQL
+    participant Outbox as Outbox Worker
+
+    Client->>WebFlux: POST /api/v1/objects/Project__c/records
+    Note over WebFlux: Reactive pipeline starts (non-blocking)
+
+    WebFlux->>Sec: validate JWT
+    Sec->>Sec: extract tenant_id from JWT claim
+    Sec->>WebFlux: set tenant_id in Reactor Context
+
+    WebFlux->>Meta: loadObject(tenant, "Project__c")
+    Meta->>Meta: cache hit? return immediately
+    Meta-->>WebFlux: ObjectDefinition + FieldDefinitions
+
+    WebFlux->>Sec: checkObjectPermission(CREATE)
+    Sec-->>WebFlux: allowed
+
+    WebFlux->>Auto: runBeforeAutomations(record, BEFORE_INSERT)
+    Auto->>Auto: evaluate DSL expressions
+    Auto->>Auto: run UserCode (sandboxed)
+    Auto-->>WebFlux: mutated record values
+
+    WebFlux->>Auto: runValidationRules(record)
+    Auto-->>WebFlux: validation passed (or error → 422)
+
+    WebFlux->>R2DBC: BEGIN TRANSACTION
+    R2DBC->>R2DBC: SET LOCAL app.current_tenant = $tenantId
+    Note over R2DBC: PostgreSQL RLS now active for this connection
+
+    WebFlux->>Query: buildInsertSQL(objectDef, fieldValues)
+    Query->>Query: map field api_names → JSONB keys or columns
+    Query->>Query: parameterized bindings only (no concatenation)
+    Query->>R2DBC: execute INSERT INTO record ...
+    R2DBC-->>Query: inserted row id
+
+    WebFlux->>R2DBC: INSERT INTO outbox (event) — same transaction
+    WebFlux->>R2DBC: COMMIT
+
+    R2DBC-->>Client: 201 Created {id, ...}
+
+    Note over Outbox: Async — after commit
+    Outbox->>R2DBC: SELECT undelivered outbox events
+    Outbox->>Outbox: deliver webhooks (HMAC signed, retry+backoff)
+    Outbox->>Auto: run AFTER automations
 ```
 
-Bindings: `[$tenantId, $projectObjectId, 'OPEN']`
+---
 
-## 6. Security Model
+## 5. Multi-tenancy Model
 
-### 6.1 Layers (Defense in Depth)
+Tenant isolation is enforced at **two independent layers** (defense in depth). Both must pass.
 
-1. **JWT validation** — Spring Security, tenant claim extracted.
-2. **Tenant context** — set on Reactor Context, propagated to R2DBC session (`SET LOCAL`).
-3. **PostgreSQL RLS** — database-level policy blocks cross-tenant access.
-4. **Application filter** — explicit `AND tenant_id = $tenantId` in every query.
-5. **FLS (Field-Level Security)** — fields stripped from queries/responses based on permission sets.
-6. **RLS (Record-Level Security)** — ownership/sharing rules applied as additional WHERE clauses.
+```mermaid
+graph TB
+    subgraph Request["Incoming Request"]
+        JWT["JWT Token\n{ sub: user-id, tenant_id: uuid, ... }"]
+    end
 
-### 6.2 RLS Policy Example
+    subgraph App["Application Layer"]
+        TenantExtract["Extract tenant_id\nfrom JWT claim only\n(never from URL/body)"]
+        ReactorCtx["Store in\nReactor Context\n(not ThreadLocal)"]
+        AppFilter["Explicit SQL filter\nAND tenant_id = $1\nin every query"]
+    end
+
+    subgraph DB["PostgreSQL Layer"]
+        SetLocal["SET LOCAL\napp.current_tenant = $tenantId\n(per R2DBC connection)"]
+        RLS["Row-Level Security Policy\nUSING (tenant_id =\ncurrent_setting('app.current_tenant')::uuid)"]
+        PhysicalRow["Physical row check\n(DB engine enforces)"]
+    end
+
+    JWT --> TenantExtract
+    TenantExtract --> ReactorCtx
+    ReactorCtx --> AppFilter
+    ReactorCtx --> SetLocal
+    AppFilter -->|parameterized bind| DB
+    SetLocal --> RLS
+    RLS --> PhysicalRow
+
+    style AppFilter fill:#d4edda,stroke:#28a745
+    style RLS fill:#d4edda,stroke:#28a745
+```
+
+**Rules for AI agents:**
+- `tenant_id` **only** comes from `Reactor Context` → `ctx.get(TENANT_KEY)`.
+- Every query must have `AND tenant_id = $N` even with RLS enabled.
+- Every new table needs `tenant_id UUID NOT NULL` and an RLS policy in its Flyway migration.
+
+---
+
+## 6. Metadata Engine
+
+The Metadata Engine is the most read-intensive subsystem. It is the single source of truth about object/field definitions at runtime.
+
+```mermaid
+graph LR
+    subgraph Caller["Any module (API, QueryEngine, Security…)"]
+        Call["metadataEngine\n.findObject(tenantId, apiName)"]
+    end
+
+    subgraph MetaEngine["backend/metadata-engine"]
+        Cache["AsyncLoadingCache\nCaffeine\nkey = (tenant_id, api_name)\nexpire: 10 min / max 10k entries"]
+        Loader["Cache Loader\n(async, returns CompletableFuture)"]
+        Mapper["Row Mapper\nResultRow → ObjectDefinition\n         → FieldDefinition[]"]
+    end
+
+    subgraph DB["PostgreSQL"]
+        MdObject["md_object"]
+        MdField["md_field"]
+    end
+
+    subgraph Invalidation["Cache Invalidation"]
+        MetaWrite["Metadata write\n(object/field saved)"]
+        InvalidEvent["Invalidation event\n(outbox or in-memory bus)"]
+        CacheEvict["cache.synchronous()\n.invalidate(key)"]
+    end
+
+    Call -->|Mono from CompletableFuture| Cache
+    Cache -->|miss| Loader
+    Loader --> Mapper
+    Mapper --> MdObject
+    Mapper --> MdField
+    MdObject --> Mapper
+    MdField --> Mapper
+    Mapper -->|ObjectDefinition| Cache
+
+    MetaWrite --> InvalidEvent
+    InvalidEvent --> CacheEvict
+    CacheEvict --> Cache
+```
+
+**Key types:**
+- `ObjectDefinition` — immutable record: `(id, tenantId, apiName, label, labelPlural, isCustom, fields)`
+- `FieldDefinition` — immutable record: `(id, tenantId, objectId, apiName, label, fieldType, isRequired, isUnique, storageKind, storageKey, config)`
+- `MetadataKey` — cache key: `(tenantId, apiName)` for objects; `(tenantId, objectId, apiName)` for fields.
+
+---
+
+## 7. Dynamic Persistence Layer
+
+Records are stored in a single universal table. Custom fields live in the `data JSONB` column unless explicitly promoted.
+
+```mermaid
+graph TB
+    subgraph API["API / Automation layer"]
+        FieldValues["Map<String, Object>\n{ 'name': 'Acme', 'due_date__c': '2026-06-01' }"]
+    end
+
+    subgraph Persistence["backend/persistence — DynamicRecordRepository"]
+        Coerce["Type Coercion\nFieldDefinition.fieldType → Java type\n(TEXT, NUMBER, DATE, BOOLEAN…)"]
+        StorageRouter["Storage Router\nfor each field:\nstorageKind == COLUMN → real column\nstorageKind == JSONB  → data JSONB key"]
+        SqlBuilder["SQL Builder\n(parameterized, no concatenation)\nINSERT INTO record (tenant_id, object_id, name, data)\nVALUES ($1, $2, $3, $4::jsonb)"]
+    end
+
+    subgraph DB["PostgreSQL record table"]
+        SystemCols["System columns\nid · tenant_id · object_id\nname · owner_id\ncreated_at · updated_at"]
+        JsonbCol["data JSONB\n{ 'due_date__c': '2026-06-01',\n  'status__c': 'OPEN', … }"]
+        PromotedCol["Promoted columns\n(added via Flyway migration\nwhen field becomes 'hot')"]
+    end
+
+    FieldValues --> Coerce
+    Coerce --> StorageRouter
+    StorageRouter -->|storageKind=COLUMN| SqlBuilder
+    StorageRouter -->|storageKind=JSONB| SqlBuilder
+    SqlBuilder --> SystemCols
+    SqlBuilder --> JsonbCol
+    SqlBuilder -.->|future promotion| PromotedCol
+```
+
+**Storage kinds:**
+
+| Category | Storage | Example |
+|---|---|---|
+| System fields | Real columns | `id`, `tenant_id`, `name`, `owner_id`, `created_at` |
+| All custom fields (default) | `data` JSONB | `data->>'due_date__c'` |
+| Hot promoted fields | Real columns (Flyway migration) | `due_date` column added manually |
+
+**No dynamic DDL at runtime.** `CREATE/ALTER TABLE` never happens in application code.
+
+---
+
+## 8. Query Engine
+
+The Query Engine translates a SOQL-like query string into a safe, parameterized SQL statement. It is the only place where user-supplied field/object names are mapped to SQL constructs.
+
+```mermaid
+flowchart TD
+    Input["Input: SOQL-like query string\nSELECT name, due_date__c FROM Project__c\nWHERE status__c = 'OPEN' ORDER BY created_at DESC LIMIT 50"]
+
+    Parse["1. Parse\nTokenize → AST\n(object name, field list, predicates, order, limit)"]
+
+    ValidateObjects["2. Validate object names\nmetadataEngine.findObject(tenant, 'Project__c')\n→ ObjectDefinition or reject(UnknownObjectException)"]
+
+    ValidateFields["3. Validate + resolve field names\nfor each field in SELECT + WHERE + ORDER BY:\nmetadataEngine.findField(tenant, objId, apiName)\n→ FieldDefinition or reject(UnknownFieldException)"]
+
+    FLS["4. FLS (Field-Level Security)\nremove fields user has no READ permission to\nfrom SELECT list (silently stripped)"]
+
+    Translate["5. Translate to SQL\nCOLUMN field → r.column_name\nJSONB field  → r.data->>'key' with type cast\npredicate values → $N bindings"]
+
+    InjectTenant["6. Inject mandatory filters\nAND r.tenant_id = $tenantId  ← always\nAND r.object_id = $objectId  ← always"]
+
+    Execute["7. Execute via R2DBC\nDatabaseClient.sql(sql).bindValues(params)\n→ Flux<Map<String, Object>>"]
+
+    Output["Output: Flux<Map<String, Object>>\nreactive stream of typed records"]
+
+    Input --> Parse --> ValidateObjects --> ValidateFields --> FLS --> Translate --> InjectTenant --> Execute --> Output
+
+    style FLS fill:#fff3cd,stroke:#ffc107
+    style InjectTenant fill:#d4edda,stroke:#28a745
+```
+
+**Generated SQL example:**
 
 ```sql
-ALTER TABLE record ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY tenant_isolation ON record
-    USING (tenant_id = current_setting('app.current_tenant')::uuid);
+-- Input: SELECT name, due_date__c FROM Project__c WHERE status__c = 'OPEN'
+SELECT r.name,
+       r.data->>'due_date__c' AS "due_date__c"
+FROM   record r
+WHERE  r.tenant_id = $1          -- injected, non-negotiable
+  AND  r.object_id = $2          -- resolved from metadata
+  AND  r.data->>'status__c' = $3 -- JSONB field predicate
+ORDER BY r.created_at DESC
+LIMIT  50
+-- Bindings: [$tenantId, $projectObjectId, 'OPEN']
 ```
 
-## 7. Automation Engine
+---
 
-### 7.1 Execution Lifecycle
+## 9. Security Model (Defense in Depth)
 
+Security is layered: each layer is independent and can catch what an upstream layer might miss.
+
+```mermaid
+graph TB
+    Request["HTTP Request"]
+
+    L1["Layer 1 — JWT Validation\nSpring Security verifies signature + expiry\nExtracts: sub (user), tenant_id, roles"]
+    L2["Layer 2 — Tenant Context Propagation\nReactor Context ← tenant_id from JWT only\nNever from URL, body, or headers"]
+    L3["Layer 3 — Object-Level Permission\nUser has CREATE/READ/UPDATE/DELETE\non this object type? (Permission Set / Profile)"]
+    L4["Layer 4 — FLS (Field-Level Security)\nFields stripped from SELECT if user lacks READ\nFields blocked from write if user lacks EDIT"]
+    L5["Layer 5 — Application WHERE clause\nEvery query: AND tenant_id = $tenantId\nExplicit in application code"]
+    L6["Layer 6 — PostgreSQL RLS\nSET LOCAL app.current_tenant = $tenantId\nDB-level policy: USING (tenant_id = current_setting(...)::uuid)"]
+    L7["Layer 7 — Record-Level Security (future)\nOwnership + sharing rules as additional WHERE clauses"]
+
+    Request --> L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7
+
+    style L5 fill:#d4edda,stroke:#28a745
+    style L6 fill:#d4edda,stroke:#28a745
+    style L3 fill:#fff3cd,stroke:#ffc107
+    style L4 fill:#fff3cd,stroke:#ffc107
 ```
-1. Resolve tenant + permissions (reactive)
-2. Load object metadata from cache
-3. Type coercion and field validation
-4. Execute BEFORE automations (declarative + user-code)
-5. Execute validation rules (DSL expressions)
-6. Persist record (R2DBC transaction)
-7. Publish AFTER events to outbox table (same transaction)
-8. [Async] Outbox worker delivers webhooks + side effects
+
+**Security invariants (enforced by tests):**
+- Cross-tenant query must return empty — never data, never an error that leaks existence.
+- SQL injection attempt must return empty or an explicit error — never data.
+- A user without field READ permission must never see that field in any response.
+
+---
+
+## 10. Automation Engine
+
+Automations fire at specific points in the record lifecycle. The execution cycle is fixed and deterministic.
+
+```mermaid
+flowchart TD
+    Start(["Record create/update/delete request"])
+
+    Step1["1. Resolve tenant + permissions\n(Reactor Context → JWT)"]
+    Step2["2. Load ObjectDefinition from MetadataEngine\n(cache hit is common path)"]
+    Step3["3. Type coercion + field validation\n(string → typed value per FieldDefinition.fieldType)"]
+    Step4["4. Run BEFORE automations\n(declarative: DSL expression actions)\n(user-code: UserCodeExecutor sandbox)"]
+    Step5["5. Run Validation Rules\n(DSL expressions evaluated per md_validation_rule)\n(false → 422 with error_message)"]
+    Step6["6. Persist record\n(R2DBC transaction\nINSERT/UPDATE record table)"]
+    Step7["7. Insert outbox event\n(same transaction as Step 6\noutbox table: event_type, payload, tenant_id)"]
+    Commit(["COMMIT"])
+    Step8["8. Async: Outbox Worker\nDeliver webhooks (HMAC signed, retry+backoff)\nRun AFTER automations\nEmit platform events"]
+
+    Start --> Step1 --> Step2 --> Step3 --> Step4 --> Step5
+    Step5 -->|validation fails| Error422["422 Unprocessable Entity"]
+    Step5 -->|passes| Step6 --> Step7 --> Commit --> Step8
 ```
 
-### 7.2 Expression DSL
+### Expression DSL (safe evaluator)
 
-Safe, sandboxed expression evaluator (whitelist approach). Supported operations:
-- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- Boolean: `AND`, `OR`, `NOT`
-- Field references: `{field_api_name}`
-- Pure functions: `ISBLANK()`, `LEN()`, `CONTAINS()`, `TODAY()`, `NOW()`, `ROUND()`, `FLOOR()`, `CEILING()`
+The DSL evaluator uses a whitelist — it is **not** a general-purpose language interpreter.
 
-Never evaluates as raw Java/JVM code.
+```mermaid
+graph LR
+    ExprInput["Expression string\ne.g. ISBLANK({due_date__c}) AND {status__c} == 'OPEN'"]
 
-### 7.3 UserCodeExecutor Port
+    Lexer["Lexer\n(token stream)"]
+    Parser["Parser\n(AST: BinaryOp, FieldRef, Literal, FunctionCall)"]
+    Validator["Validator\n(whitelist: only allowed node types\nno reflection, no I/O, no loops)"]
+    Evaluator["Evaluator\n(walks AST with field values from record)"]
+    Result["Boolean / value result"]
 
+    ExprInput --> Lexer --> Parser --> Validator --> Evaluator --> Result
+    Validator -->|rejected node type| Error["EvaluationException\n(blocked by whitelist)"]
+```
+
+**Allowed DSL operations:** comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`), boolean logic (`AND`, `OR`, `NOT`), field references `{api_name}`, pure functions: `ISBLANK()`, `LEN()`, `CONTAINS()`, `TODAY()`, `NOW()`, `ROUND()`, `FLOOR()`, `CEILING()`.
+
+---
+
+## 11. AI Layer (Spring AI)
+
+The AI layer is a **productivity enhancement only**. It never writes to the system directly.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant AIAPI as AI API endpoint
+    participant SpringAI as Spring AI 2 M6<br/>(LLM abstraction)
+    participant Schema as JSON Schema Validator
+    participant Meta as Metadata Engine
+
+    rect rgb(255, 243, 205)
+        Note over User,Meta: Use case 1 — NL → Metadata proposal
+        User->>AIAPI: "Create a Project object with name, due date, and assignee"
+        AIAPI->>SpringAI: prompt + system context (tenant's existing objects)
+        SpringAI-->>AIAPI: JSON proposal (ObjectDefinition shape)
+        AIAPI->>Schema: validate against metadata-object-schema.json
+        Schema-->>AIAPI: valid / invalid
+        AIAPI-->>User: show proposal UI (confirm/reject)
+        User->>AIAPI: confirm
+        AIAPI->>Meta: applyObjectDefinition(proposal)
+    end
+
+    rect rgb(212, 237, 218)
+        Note over User,Meta: Use case 2 — NL → Query
+        User->>AIAPI: "Show me all open projects due this week"
+        AIAPI->>SpringAI: prompt + available objects/fields for this tenant
+        SpringAI-->>AIAPI: SOQL-like query string
+        AIAPI->>Meta: validate query (fields exist, user has permission)
+        AIAPI-->>User: execute via Query Engine (subject to FLS)
+    end
+```
+
+**AI safety constraints:**
+- AI output is always validated against JSON Schema before any system mutation.
+- AI never receives DB credentials, connection strings, or raw SQL.
+- AI cannot bypass tenant isolation, FLS, or RLS.
+- All AI calls are `Mono<AIResponse>` — non-blocking, never `.block()`.
+- Human confirmation is required for any metadata mutation proposed by AI.
+
+---
+
+## 12. Frontend Renderer Architecture
+
+The frontend is a **metadata-driven rendering engine**, not a collection of hardcoded entity screens.
+
+```mermaid
+graph TB
+    subgraph MetaAPI["Metadata API (backend)"]
+        ObjMeta["GET /api/v1/metadata/objects/{apiName}"]
+        LayoutMeta["GET /api/v1/metadata/layouts/{id}"]
+        FieldMeta["GET /api/v1/metadata/fields?objectId=…"]
+    end
+
+    subgraph Frontend["frontend/renderer"]
+        AppShell["AppShell\n(navigation, object selector,\nglobal search)"]
+
+        subgraph Renderers["Renderer Components"]
+            LayoutRenderer["LayoutRenderer\ncompose a detail/edit page\nfrom LayoutDefinition\n(sections, columns, field order)"]
+            ListViewRenderer["ListViewRenderer\ntable from ListViewDefinition\n(columns, filters, sort)"]
+            FieldRenderer["FieldRenderer (per type)\nTEXT → TextInput\nNUMBER → NumberInput\nDATE → DatePicker\nPICKLIST → Select\nLOOKUP → AsyncCombobox\n…"]
+        end
+
+        subgraph State["State Management"]
+            TanStackQuery["TanStack Query\n(server state, caching)"]
+            RHF["React Hook Form\n(form state)"]
+            Zod["Zod schemas\n(generated from FieldDefinition[]\nat runtime — not compile time)"]
+        end
+
+        DesignSystem["design-system\n~30 base components\n(Button, Input, Card, Table…)"]
+    end
+
+    ObjMeta --> LayoutRenderer
+    LayoutMeta --> LayoutRenderer
+    FieldMeta --> FieldRenderer
+    FieldMeta --> Zod
+
+    AppShell --> LayoutRenderer
+    AppShell --> ListViewRenderer
+    LayoutRenderer --> FieldRenderer
+    FieldRenderer --> DesignSystem
+    ListViewRenderer --> DesignSystem
+
+    RHF --> Zod
+    TanStackQuery --> LayoutRenderer
+    TanStackQuery --> ListViewRenderer
+```
+
+**Rendering flow:**
+1. `AppShell` detects object `apiName` from URL.
+2. `TanStack Query` fetches `ObjectDefinition` + `LayoutDefinition` from metadata API.
+3. `LayoutRenderer` reads `definition.sections[].columns[].fields[]` and renders `FieldRenderer` per field.
+4. `Zod` schema is generated dynamically from `FieldDefinition[]` (required, type, max length).
+5. `React Hook Form` uses the generated Zod schema for real-time validation.
+
+---
+
+## 13. Integration Layer (Webhooks & Outbox)
+
+Outbound integrations use the **transactional outbox pattern** to guarantee at-least-once delivery without distributed transactions.
+
+```mermaid
+sequenceDiagram
+    participant App as Application<br/>(record save)
+    participant PG as PostgreSQL
+    participant Worker as Outbox Worker<br/>(Reactive, polling)
+    participant Webhook as External Webhook<br/>Endpoint
+
+    App->>PG: BEGIN
+    App->>PG: INSERT INTO record ...
+    App->>PG: INSERT INTO outbox (event_type, payload, tenant_id, status='PENDING')
+    App->>PG: COMMIT
+
+    Note over Worker: Async loop (reactive, non-blocking)
+    Worker->>PG: SELECT * FROM outbox WHERE status='PENDING' LIMIT 100 FOR UPDATE SKIP LOCKED
+    PG-->>Worker: batch of events
+
+    loop For each event
+        Worker->>Worker: sign payload with tenant HMAC key
+        Worker->>Webhook: POST event (signed, idempotency key)
+        alt delivery success
+            Worker->>PG: UPDATE outbox SET status='DELIVERED'
+        else delivery failure
+            Worker->>Worker: exponential backoff
+            Worker->>PG: UPDATE outbox SET retry_count++, next_retry_at=...
+        end
+    end
+```
+
+**Outbox table:**
+```sql
+CREATE TABLE outbox (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id      UUID NOT NULL,
+    event_type     TEXT NOT NULL,      -- e.g. 'record.created', 'record.updated'
+    object_api_name TEXT NOT NULL,
+    record_id      UUID,
+    payload        JSONB NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'PENDING',
+    retry_count    INT NOT NULL DEFAULT 0,
+    next_retry_at  TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+---
+
+## 14. Database Schema (ER Diagram)
+
+```mermaid
+erDiagram
+    tenant {
+        uuid id PK
+        text name
+        text slug UK
+        timestamptz created_at
+    }
+
+    md_object {
+        uuid id PK
+        uuid tenant_id FK
+        text api_name
+        text label
+        text label_plural
+        boolean is_custom
+        text storage_table
+        timestamptz created_at
+    }
+
+    md_field {
+        uuid id PK
+        uuid tenant_id FK
+        uuid object_id FK
+        text api_name
+        text label
+        text field_type
+        boolean is_required
+        boolean is_unique
+        boolean is_custom
+        text storage_kind
+        text storage_key
+        jsonb config
+        uuid reference_to FK
+        timestamptz created_at
+    }
+
+    md_validation_rule {
+        uuid id PK
+        uuid tenant_id FK
+        uuid object_id FK
+        text name
+        text expression
+        text error_message
+        boolean is_active
+    }
+
+    md_layout {
+        uuid id PK
+        uuid tenant_id FK
+        uuid object_id FK
+        text name
+        jsonb definition
+    }
+
+    md_list_view {
+        uuid id PK
+        uuid tenant_id FK
+        uuid object_id FK
+        text name
+        jsonb definition
+    }
+
+    md_automation {
+        uuid id PK
+        uuid tenant_id FK
+        uuid object_id FK
+        text trigger_event
+        text kind
+        jsonb definition
+        boolean is_active
+    }
+
+    record {
+        uuid id PK
+        uuid tenant_id FK
+        uuid object_id FK
+        text name
+        uuid owner_id
+        jsonb data
+        timestamptz created_at
+        timestamptz updated_at
+        uuid created_by
+        uuid updated_by
+    }
+
+    outbox {
+        uuid id PK
+        uuid tenant_id FK
+        text event_type
+        text object_api_name
+        uuid record_id
+        jsonb payload
+        text status
+        int retry_count
+        timestamptz next_retry_at
+        timestamptz created_at
+    }
+
+    tenant ||--o{ md_object : "owns"
+    tenant ||--o{ record : "owns"
+    md_object ||--o{ md_field : "has"
+    md_object ||--o{ md_validation_rule : "has"
+    md_object ||--o{ md_layout : "has"
+    md_object ||--o{ md_list_view : "has"
+    md_object ||--o{ md_automation : "has"
+    md_object ||--o{ record : "instances of"
+    md_field }o--o| md_object : "references (LOOKUP)"
+```
+
+---
+
+## 15. Reactive Programming Model
+
+All I/O in OSC is non-blocking. This section is critical for AI agents writing backend code.
+
+```mermaid
+graph LR
+    subgraph Rules["Non-negotiable rules"]
+        R1["Never call .block()\nor .toStream()\non event loop"]
+        R2["tenant_id via\nReactor Context\nnot ThreadLocal"]
+        R3["All DB ops return\nMono or Flux\nvia R2DBC"]
+        R4["CPU-bound tasks\n→ Schedulers\n.boundedElastic()"]
+    end
+
+    subgraph Pattern["Tenant context pattern"]
+        Boundary["Request boundary\n(WebFilter)"]
+        CtxWrite["contextWrite(\nctx → ctx.put(TENANT_KEY, tenantId))"]
+        CtxRead["Mono.deferContextual(\nctx → Mono.just(ctx.get(TENANT_KEY)))"]
+        R2DBCSet["R2DBC connection:\nSET LOCAL app.current_tenant = $1"]
+    end
+
+    Boundary --> CtxWrite
+    CtxWrite --> CtxRead
+    CtxRead --> R2DBCSet
+```
+
+**Correct reactive pattern:**
 ```java
-public interface UserCodeExecutor {
-    Mono<ExecutionResult> execute(UserCodeDefinition code, ExecutionContext ctx);
+// ✅ Correct — reactive with Reactor Context
+public Mono<Record> findById(UUID id) {
+    return Mono.deferContextual(ctx -> {
+        String tenantId = ctx.get(TENANT_KEY);
+        return databaseClient
+            .sql("SELECT * FROM record WHERE id = $1 AND tenant_id = $2")
+            .bind("$1", id)
+            .bind("$2", tenantId)
+            .map(this::mapRow)
+            .one();
+    });
+}
+
+// ❌ Wrong — blocks the event loop
+public Record findById(UUID id) {
+    return databaseClient.sql("...").map(this::mapRow).one().block();
+}
+
+// ❌ Wrong — ThreadLocal breaks in reactive
+public Mono<Record> findById(UUID id) {
+    String tenantId = TenantHolder.get(); // ThreadLocal = broken in WebFlux
+    ...
 }
 ```
 
-Phase 5 implementation: sandboxed DSL/scripting.
-Future: WASM runtime or container-based isolation.
+**Transaction pattern:**
+```java
+// R2DBC reactive transaction
+transactionalOperator.execute(tx ->
+    setTenantSession(tenantId)
+        .then(databaseClient.sql("INSERT INTO record ...").fetch().rowsUpdated())
+        .then(databaseClient.sql("INSERT INTO outbox ...").fetch().rowsUpdated())
+).subscribe();
+```
 
-## 8. Spring AI Integration
+---
 
-### 8.1 Use Cases (All Off Critical Path)
+## 16. Infrastructure Topology
 
-1. **NL → Metadata**: User says "create a Project object with name, due date, and assignee" → Spring AI produces a validated metadata proposal → user confirms → metadata engine applies it.
-2. **NL → Query**: Natural language question → Spring AI translates to Query Engine DSL → always subject to user permissions.
-3. **Contextual assistance**: Help building validation rules, suggesting fields, explaining errors.
+```mermaid
+graph TB
+    subgraph Internet["Internet"]
+        Users["Users / API clients"]
+    end
 
-### 8.2 Safety
+    subgraph Cloud["Cloud (Pulumi TypeScript — infrastructure/)"]
+        subgraph Network["VPC / Networking"]
+            LB["Load Balancer\n(HTTPS termination)"]
+        end
 
-- AI output is always validated against JSON Schema before application.
-- AI never receives database credentials or connection parameters.
-- AI cannot bypass tenant isolation or FLS/RLS.
-- All AI calls are async (`Mono<AIResponse>`), never blocking.
+        subgraph Compute["Container Service"]
+            App1["OSC instance 1\n(Spring Boot / Netty)"]
+            App2["OSC instance 2\n(Spring Boot / Netty)"]
+        end
 
-## 9. Infrastructure
+        subgraph Data["Data Tier"]
+            PG["PostgreSQL 16+\n(managed, RLS enabled)"]
+            Cache["Caffeine\n(in-process, per node)"]
+        end
 
-See `infrastructure/` directory. Pulumi TypeScript stacks provision:
-- PostgreSQL (managed or container, leveraging services from `hneyra/iaac`)
-- Container registry
-- Application compute (container service)
-- Networking (VPC, security groups)
-- Secrets management
-- Observability stack
+        subgraph Secrets["Secrets Manager"]
+            DBCreds["DB credentials"]
+            JWTSecret["JWT signing key"]
+            HMACKeys["Tenant HMAC keys"]
+        end
+
+        subgraph Obs["Observability"]
+            Logs["Structured logs\n(JSON)"]
+            Metrics["Metrics\n(Actuator → collector)"]
+            Traces["Traces\n(OpenTelemetry)"]
+        end
+    end
+
+    Users --> LB
+    LB --> App1
+    LB --> App2
+    App1 --> PG
+    App2 --> PG
+    App1 --> Cache
+    App2 --> Cache
+    App1 --> Secrets
+    App2 --> Secrets
+    App1 --> Obs
+    App2 --> Obs
+```
+
+**Deployment notes:**
+- Monolithic-modular at launch (all backend modules in one deployable JAR).
+- Pulumi stacks: `dev` and `prod`. References services from `hneyra/iaac`.
+- Local development: `docker-compose` with PostgreSQL + application.
+- Cache is in-process (Caffeine) per node; invalidation events ensure consistency across nodes.
+
+---
+
+## 17. Implementation Phases at a Glance
+
+```mermaid
+gantt
+    title OSC Implementation Phases
+    dateFormat  YYYY-MM
+    axisFormat  %b '%y
+
+    section Phase 0 — Metadata foundations
+    Flyway V1 schema (md_* + record)   :done, p0a, 2026-05, 1w
+    JSON Schema contracts              :done, p0b, 2026-05, 1w
+    Seed objects (Account, Contact)    :done, p0c, 2026-05, 1w
+    ADR-001 to ADR-004                 :done, p0d, 2026-05, 1w
+
+    section Phase 1 — Dynamic Persistence
+    CRUD via R2DBC + JSONB             :p1a, after p0c, 2w
+    RLS + tenant context               :p1b, after p0c, 2w
+    Isolation test suite               :p1c, after p1a, 1w
+
+    section Phase 2 — Query Engine + API
+    SOQL parser + SQL translator       :p2a, after p1a, 2w
+    REST API autogenerated             :p2b, after p2a, 2w
+    SQL injection tests                :p2c, after p2a, 1w
+
+    section Phase 3 — Frontend Renderer
+    Design system (~30 components)     :p3a, after p2b, 3w
+    FieldRenderer + LayoutRenderer     :p3b, after p3a, 2w
+    End-to-end CRUD from UI            :p3c, after p3b, 1w
+
+    section Phase 4 — Permissions
+    Profiles + Permission Sets         :p4a, after p3c, 2w
+    FLS in Query Engine + API          :p4b, after p4a, 1w
+
+    section Phase 5 — Automation
+    DSL expression evaluator           :p5a, after p4b, 2w
+    UserCodeExecutor (sandbox)         :p5b, after p5a, 2w
+    Outbox + event delivery            :p5c, after p5a, 1w
+
+    section Phase 6 — Integrations + AI
+    Webhooks (HMAC, retry)             :p6a, after p5c, 2w
+    Spring AI NL→metadata + NL→query  :p6b, after p6a, 2w
+
+    section Phase 7 — Hardening
+    Observability + rate-limiting      :p7a, after p6b, 2w
+    Performance + field promotion      :p7b, after p7a, 2w
+```
+
+---
+
+## Quick Reference for AI Agents
+
+| Task | Where to look |
+|---|---|
+| Adding a new backend module | `backend/<module>/build.gradle.kts` — follow existing pattern |
+| Writing a reactive DB query | See §15 — use `Mono.deferContextual` + R2DBC bindings |
+| Adding a new metadata table | `backend/persistence/src/main/resources/db/migration/V{N}__desc.sql` — include `tenant_id`, RLS policy |
+| Using object/field metadata | Inject `MetadataEngine`, call `findObject(tenantId, apiName)` — never query `md_object` directly |
+| Building a query | Use `QueryEngine` — never concatenate user input into SQL |
+| Cross-tenant isolation test | See §9 — result must be empty (not forbidden) |
+| Non-trivial architectural decision | Write `docs/adr/ADR-XXX-title.md` before implementing |
+| Understanding data storage | See §7 — all custom fields → `data JSONB`, no dynamic DDL |
+| AI integration | See §11 — AI proposes, human confirms, schema validates |
