@@ -41,3 +41,10 @@ The project also specifies Java 25, which includes virtual threads (Project Loom
 - No JDBC or JPA dependencies in production modules.
 - Flyway runs synchronously at startup (before the reactive context starts) — this is intentional and acceptable.
 - All reactive chains must handle `EmptyResultDataAccessException` via `.switchIfEmpty()` or `.defaultIfEmpty()`.
+
+## Implementation references
+
+- `backend/metadata-engine/build.gradle.kts` / `backend/persistence/build.gradle.kts` — `reactor-core` and `spring-boot-starter-data-r2dbc`; no JDBC/JPA in production modules.
+- `backend/metadata-engine/src/main/java/dev/osc/metadata/CaffeineMetadataEngine.java` — fully reactive (`Mono`/`Flux`, no `.block()`).
+- `backend/persistence/src/main/java/dev/osc/persistence/R2dbcMetadataRepository.java` — R2DBC `DatabaseClient` access throughout.
+- `backend/api/src/test/java/dev/osc/api/arch/BlockingCallArchTest.java` — ArchUnit test that fails the build if production code calls `.block()`.

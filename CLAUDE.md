@@ -7,7 +7,11 @@ La fuente de verdad de arquitectura y plan de ejecución es **[docs/PROJECT.md](
 ## Antes de empezar cualquier tarea
 
 1. Lee `docs/PROJECT.md` — arquitectura, fases, decisiones.
-2. Lee los ADR relevantes en `docs/adr/`.
+2. Lee los ADR relevantes en `docs/adr/`:
+   - [ADR-001](docs/adr/ADR-001-multi-tenancy.md) — Multi-tenancy: shared schema + PostgreSQL RLS.
+   - [ADR-002](docs/adr/ADR-002-jsonb-storage.md) — Storage: JSONB universal con promoción a columna.
+   - [ADR-003](docs/adr/ADR-003-reactive-stack.md) — Stack reactivo: Spring WebFlux + R2DBC.
+   - [ADR-004](docs/adr/ADR-004-pulumi-infrastructure.md) — Infraestructura como código: Pulumi TypeScript.
 3. Lee el contrato relevante en `docs/contracts/`.
 4. Identifica en qué FASE estamos; no construyas sobre lo que aún no existe.
 5. Lee `agents/CLAUDE.md` para instrucciones detalladas de agente IA.
