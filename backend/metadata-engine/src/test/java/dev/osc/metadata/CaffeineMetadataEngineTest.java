@@ -28,7 +28,7 @@ class CaffeineMetadataEngineTest {
 
     @BeforeEach
     void setUp() {
-        engine = new CaffeineMetadataEngine(repository, new FieldAccessCounter());
+        engine = new CaffeineMetadataEngine(repository, new FieldAccessCounter(), new MetadataCacheProperties());
     }
 
     // ── findObject ──────────────────────────────────────────────────────────
