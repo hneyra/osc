@@ -1,0 +1,18 @@
+{
+  "apiName": "Contact",
+  "label": "Contact",
+  "labelPlural": "Contacts",
+  "isCustom": false,
+  "fields": [
+    { "apiName": "name", "label": "Name", "fieldType": "TEXT", "isRequired": true, "storageKind": "COLUMN" },
+    { "apiName": "email__c", "label": "Email", "fieldType": "EMAIL", "storageKind": "JSONB" },
+    { "apiName": "phone__c", "label": "Phone", "fieldType": "PHONE", "storageKind": "JSONB" },
+    {
+      "apiName": "account_id__c",
+      "label": "Account",
+      "fieldType": "LOOKUP",
+      "storageKind": "JSONB",
+      "config": { "referenceTo": "Account" }
+    }
+  ]
+}
