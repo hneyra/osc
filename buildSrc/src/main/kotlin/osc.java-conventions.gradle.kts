@@ -28,10 +28,15 @@ dependencies {
     }
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("io.projectreactor:reactor-test")
-    testImplementation("com.tngtech.archunit:archunit-junit5:1.4.0")
+    testImplementation("com.tngtech.archunit:archunit-junit5:1.4.1")
 }
 
 tasks.withType<Test> {
     useJUnitPlatform()
     jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStackTraces = true
+        events("failed")
+    }
 }
