@@ -125,19 +125,34 @@ class QueryEngineInjectionIntegrationTest {
     @ParameterizedTest
     @DisplayName("injection payload as a WHERE value is bound, matches nothing, and never alters the schema/data")
     @ValueSource(strings = {
+            // No internal single-quote: the scary tokens (;, --, DROP, UNION, pg_sleep) stay INSIDE
+            // the string literal, so each payload actually reaches the executor as a positional bind.
+            "1; DROP TABLE record",
+            "1 OR 1=1",
+            "1 UNION SELECT null, null",
+            "100); DROP TABLE record; --",
+            "x; SELECT pg_sleep(10); --",
+            "1 AND (SELECT 1 FROM record LIMIT 1)=1",
+            "1; TRUNCATE record",
+            "1; INSERT INTO record (tenant_id) VALUES (gen_random_uuid())",
+            // Quote-bearing payloads: the parser refuses these (a valid first line of defense).
             "' OR '1'='1",
-            "'; DROP TABLE record; --",
-            "' UNION SELECT * FROM tenant --",
-            "'; SELECT pg_sleep(10); --",
-            "'; TRUNCATE record; --",
-            "'; INSERT INTO record (tenant_id) VALUES (gen_random_uuid()); --",
-            "x' AND 1=0 UNION SELECT null --",
-            "1; DROP TABLE record"
+            "'; DROP TABLE record; --"
     })
     void injectionValue_boundAndHarmlessAtExecutor(String injection) {
         long before = totalRecordCount();
 
-        SelectQuery ast = parser.parse("SELECT name FROM Account WHERE name = '" + injection + "'");
+        SelectQuery ast;
+        try {
+            ast = parser.parse("SELECT name FROM Account WHERE name = '" + injection + "'");
+        } catch (ParseException ex) {
+            // Parser refused the malformed input before any SQL — also a valid defense.
+            assertThat(totalRecordCount())
+                    .as("record table untouched after rejected parse of '%s'", injection)
+                    .isEqualTo(before);
+            return;
+        }
+
         TranslatedQuery tq = translator.translate(ast, SYSTEM_TENANT, Set.of()).block();
         assertThat(tq).isNotNull();
         // The payload is a positional bind, not part of the SQL text.
