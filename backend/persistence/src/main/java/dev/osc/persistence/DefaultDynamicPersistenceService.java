@@ -44,16 +44,19 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                                     Map<String, Object> coercedData = new LinkedHashMap<>();
                                                     for (FieldDefinition field : fields) {
                                                         Object value = data.get(field.apiName());
-                                                        if (value == null) continue;
+                                                        // Always coerce: the engine validates required (null -> Failure)
+                                                        // and type, so required-field enforcement is not bypassed.
                                                         CoercionResult result = coercionEngine.coerce(field, value);
                                                         if (result instanceof CoercionResult.Failure f) {
                                                             return Mono.error(
                                                                     new FieldValidationException(field.apiName(), f.error())
                                                             );
                                                         }
+                                                        Object typedValue = ((CoercionResult.Success) result).typedValue();
+                                                        if (typedValue == null) continue; // optional field, no value supplied
                                                         String key = field.storageKey() != null
                                                                 ? field.storageKey() : field.apiName();
-                                                        coercedData.put(key, ((CoercionResult.Success) result).typedValue());
+                                                        coercedData.put(key, typedValue);
                                                     }
                                                     return recordRepository.insert(
                                                             new RecordInsertCommand(obj.id(), null, null, coercedData)
