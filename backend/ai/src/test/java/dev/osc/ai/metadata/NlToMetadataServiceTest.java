@@ -70,6 +70,26 @@ class NlToMetadataServiceTest {
     }
 
     @Test
+    @DisplayName("suggest rejects metadata that violates the ObjectDefinition contract")
+    void suggest_contractViolationRejected() {
+        String aiJson = """
+                {
+                  "objectApiName": "1Invalid",
+                  "label": "X",
+                  "labelPlural": "Xs",
+                  "fields": [
+                    {"apiName": "name", "label": "Name", "fieldType": "TEXT"}
+                  ]
+                }
+                """;
+        when(aiPort.suggest(anyString())).thenReturn(Mono.just(aiJson));
+
+        StepVerifier.create(service.suggest("an object whose api name is invalid"))
+                .expectErrorMatches(e -> e instanceof MetadataSuggestionParseException)
+                .verify();
+    }
+
+    @Test
     @DisplayName("suggest rejects blank description")
     void suggest_blankDescription() {
         StepVerifier.create(service.suggest("  "))

@@ -1,0 +1,23 @@
+{
+  "apiName": "Account",
+  "label": "Account",
+  "labelPlural": "Accounts",
+  "isCustom": false,
+  "fields": [
+    { "apiName": "name", "label": "Name", "fieldType": "TEXT", "isRequired": true, "storageKind": "COLUMN" },
+    {
+      "apiName": "industry__c",
+      "label": "Industry",
+      "fieldType": "PICKLIST",
+      "storageKind": "JSONB",
+      "config": {
+        "picklistValues": [
+          { "value": "TECH", "label": "Technology" },
+          { "value": "FIN", "label": "Finance" }
+        ]
+      }
+    },
+    { "apiName": "website__c", "label": "Website", "fieldType": "URL", "storageKind": "JSONB" },
+    { "apiName": "phone__c", "label": "Phone", "fieldType": "PHONE", "storageKind": "JSONB" }
+  ]
+}
