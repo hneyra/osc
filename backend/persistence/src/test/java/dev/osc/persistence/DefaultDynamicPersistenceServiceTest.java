@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -105,6 +105,33 @@ class DefaultDynamicPersistenceServiceTest {
                     .expectErrorSatisfies(err -> {
                         assertThat(err).isInstanceOf(FieldValidationException.class);
                         assertThat(((FieldValidationException) err).getFieldApiName()).isEqualTo("age__c");
+                    })
+                    .verify();
+
+            verify(recordRepository, never()).insert(any());
+        }
+
+        @Test
+        @DisplayName("missing required field: signals FieldValidationException with the field name")
+        void missingRequiredField_signalsError() {
+            UUID objectId = UUID.randomUUID();
+            ObjectDefinition object = objectFor(tenantId, objectId, "Account");
+            FieldDefinition requiredField =
+                    requiredFieldFor(tenantId, objectId, "sku__c", FieldType.TEXT, StorageKind.JSONB, "sku__c");
+
+            when(metadataEngine.findObject(tenantId, "Account")).thenReturn(Mono.just(object));
+            when(metadataEngine.findFields(tenantId, objectId)).thenReturn(Flux.just(requiredField));
+            // value is absent (null) -> the coercion engine rejects a required null
+            when(coercionEngine.coerce(eq(requiredField), isNull()))
+                    .thenReturn(CoercionResult.failure("Field 'sku__c' is required"));
+
+            StepVerifier.create(
+                    service.createRecord("Account", Map.of()) // sku__c omitted
+                            .contextWrite(ctx -> ctx.put(TenantContext.TENANT_ID_KEY, tenantId.toString()))
+            )
+                    .expectErrorSatisfies(err -> {
+                        assertThat(err).isInstanceOf(FieldValidationException.class);
+                        assertThat(((FieldValidationException) err).getFieldApiName()).isEqualTo("sku__c");
                     })
                     .verify();
 
@@ -274,6 +301,12 @@ class DefaultDynamicPersistenceServiceTest {
                                              FieldType type, StorageKind kind, String storageKey) {
         return new FieldDefinition(UUID.randomUUID(), tenantId, objectId, apiName, apiName,
                 type, kind, storageKey, false, false, null, Instant.now(), Instant.now());
+    }
+
+    private static FieldDefinition requiredFieldFor(UUID tenantId, UUID objectId, String apiName,
+                                                     FieldType type, StorageKind kind, String storageKey) {
+        return new FieldDefinition(UUID.randomUUID(), tenantId, objectId, apiName, apiName,
+                type, kind, storageKey, true, false, null, Instant.now(), Instant.now());
     }
 
     private static RecordEntity entityFor(UUID id, UUID tenantId, UUID objectId,
