@@ -5,12 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URI;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -31,8 +35,9 @@ public class DefaultFieldCoercionEngine implements FieldCoercionEngine {
                     : CoercionResult.success(null);
         }
         return switch (field.fieldType()) {
-            case TEXT, TEXTAREA   -> coerceText(rawValue);
-            case NUMBER, CURRENCY, PERCENT -> coerceNumber(rawValue);
+            case TEXT, TEXTAREA   -> coerceText(field, rawValue);
+            case NUMBER, PERCENT  -> coerceNumber(field, rawValue, null);
+            case CURRENCY         -> coerceNumber(field, rawValue, 2);
             case DATE             -> coerceDate(rawValue);
             case DATETIME         -> coerceDatetime(rawValue);
             case TIME             -> coerceTime(rawValue);
@@ -48,16 +53,35 @@ public class DefaultFieldCoercionEngine implements FieldCoercionEngine {
         };
     }
 
-    private CoercionResult coerceText(Object raw) {
-        return CoercionResult.success(raw.toString());
+    private CoercionResult coerceText(FieldDefinition field, Object raw) {
+        String value = raw.toString();
+        Integer maxLength = intConfig(field.config(), "maxLength");
+        if (maxLength != null && value.length() > maxLength) {
+            return CoercionResult.failure(
+                    "Value for field '%s' exceeds max length %d".formatted(field.apiName(), maxLength));
+        }
+        return CoercionResult.success(value);
     }
 
-    private CoercionResult coerceNumber(Object raw) {
+    private CoercionResult coerceNumber(FieldDefinition field, Object raw, Integer defaultScale) {
+        BigDecimal value;
         try {
-            return CoercionResult.success(new BigDecimal(raw.toString()));
+            value = new BigDecimal(raw.toString());
         } catch (NumberFormatException e) {
             return CoercionResult.failure("Invalid number: '%s'".formatted(raw));
         }
+        Integer scale = intConfig(field.config(), "scale");
+        if (scale == null) scale = defaultScale;
+        if (scale != null) {
+            value = value.setScale(scale, RoundingMode.HALF_UP);
+        }
+        Integer precision = intConfig(field.config(), "precision");
+        if (precision != null && value.precision() > precision) {
+            return CoercionResult.failure(
+                    "Value '%s' exceeds precision %d for field '%s'"
+                            .formatted(raw, precision, field.apiName()));
+        }
+        return CoercionResult.success(value);
     }
 
     private CoercionResult coerceDate(Object raw) {
@@ -105,15 +129,27 @@ public class DefaultFieldCoercionEngine implements FieldCoercionEngine {
 
     private CoercionResult coerceMultiPicklist(FieldDefinition field, Object raw) {
         Set<String> allowed = parsePicklistValues(field.config());
-        String[] values = raw.toString().split(";");
-        for (String v : values) {
-            String trimmed = v.trim();
-            if (!allowed.isEmpty() && !allowed.contains(trimmed)) {
-                return CoercionResult.failure(
-                        "Value '%s' is not in picklist for field '%s'".formatted(trimmed, field.apiName()));
+        List<String> values = new ArrayList<>();
+        if (raw instanceof Collection<?> collection) {
+            for (Object element : collection) {
+                if (element == null) {
+                    return CoercionResult.failure(
+                            "Null entry in multipicklist for field '%s'".formatted(field.apiName()));
+                }
+                values.add(element.toString().trim());
+            }
+        } else {
+            for (String v : raw.toString().split(";")) {
+                values.add(v.trim());
             }
         }
-        return CoercionResult.success(raw.toString());
+        for (String value : values) {
+            if (!allowed.isEmpty() && !allowed.contains(value)) {
+                return CoercionResult.failure(
+                        "Value '%s' is not in picklist for field '%s'".formatted(value, field.apiName()));
+            }
+        }
+        return CoercionResult.success(String.join(";", values));
     }
 
     private CoercionResult coerceEmail(Object raw) {
@@ -157,6 +193,17 @@ public class DefaultFieldCoercionEngine implements FieldCoercionEngine {
             return result;
         } catch (Exception e) {
             return Set.of();
+        }
+    }
+
+    /** Reads an integer setting (e.g. maxLength, precision, scale) from the field's JSON config, or null. */
+    private Integer intConfig(String config, String key) {
+        if (config == null || config.isBlank()) return null;
+        try {
+            JsonNode node = mapper.readTree(config).path(key);
+            return node.isNumber() ? node.intValue() : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 }
