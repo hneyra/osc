@@ -7,7 +7,6 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -28,12 +27,14 @@ public class CaffeineMetadataEngine implements MetadataEngine {
     private final FieldAccessCounter fieldAccessCounter;
     private final AsyncLoadingCache<ObjectCacheKey, Optional<ObjectDefinition>> objectCache;
 
-    public CaffeineMetadataEngine(MetadataRepository repository, FieldAccessCounter fieldAccessCounter) {
+    public CaffeineMetadataEngine(MetadataRepository repository,
+                                  FieldAccessCounter fieldAccessCounter,
+                                  MetadataCacheProperties cacheProperties) {
         this.repository = repository;
         this.fieldAccessCounter = fieldAccessCounter;
         this.objectCache = Caffeine.newBuilder()
-                .maximumSize(10_000)
-                .expireAfterWrite(Duration.ofMinutes(10))
+                .maximumSize(cacheProperties.getMaximumSize())
+                .expireAfterWrite(cacheProperties.getExpireAfterWrite())
                 .buildAsync((key, executor) ->
                         repository.findObject(key.tenantId(), key.apiName())
                                 .map(Optional::of)

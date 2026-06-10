@@ -26,3 +26,7 @@ management:
 osc:
   rate-limit:
     requests-per-minute: 1000
+  metadata:
+    cache:
+      expire-after-write: 10m
+      maximum-size: 10000
