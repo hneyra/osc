@@ -197,6 +197,25 @@ Owns: `OutboxWorker`, `WebhookDeliveryService`, `OutboundHttpClient`.
 2. **Integration tests** — real PostgreSQL via TestContainers. Test the full reactive pipeline.
 3. **Security tests** — cross-tenant isolation, SQL injection, permission bypass attempts.
 
+### SQL Injection Test Suite
+
+The golden rule: **all SQL goes through R2DBC parameterized binds (`$1`, `$2`, …) — never string
+concatenation.** This is enforced and verified, not just asserted by convention.
+
+Two test suites cover it, one per attack surface:
+
+| Surface | Where | What it proves |
+|---|---|---|
+| Record **id** parameter | `persistence/SqlInjectionPreventionTest` | a non-UUID id (`' OR '1'='1`, `'; DROP TABLE record; --`) fails on `UUID.fromString` *before* any SQL runs |
+| Field **values** | `persistence/SqlInjectionPreventionTest` | malicious values are carried as binds and stored as plain data — the `record` table survives intact |
+| Object **api_name** | `persistence/SqlInjectionPreventionTest` | a malicious api_name is only a metadata lookup key; an unknown object fails with `ObjectNotFoundException` and never reaches record SQL |
+| SOQL-like queries (api_name / field / value) | `query-engine/QueryEngineInjectionTest` | every name is validated against metadata and every value is a bind; injection vectors yield empty/validation error |
+
+The suite also runs **ArchUnit** rules asserting repository classes never call `String.format` or use
+`StringBuilder` to assemble SQL. Each literal vector from issue #21 (including the `pg_sleep` timing
+attack) appears in one of these tests. Rule: every vector must return empty or a validation error —
+**never data, never an unexpected exception.**
+
 ### Running Tests
 
 ```bash

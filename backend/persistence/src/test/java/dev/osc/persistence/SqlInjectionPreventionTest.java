@@ -7,9 +7,10 @@ import dev.osc.metadata.TenantContext;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.r2dbc.core.DatabaseClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -17,7 +18,6 @@ import java.util.Map;
 import java.util.UUID;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -29,6 +29,15 @@ import static org.mockito.Mockito.*;
  *     in SQL-related methods (static analysis).
  *  2. Behaviour test: a malicious payload passed through the service is
  *     treated as data, not as SQL syntax (behaviour verification via mocks).
+ *
+ * Three attack surfaces are covered, each with the literal vectors from the issue:
+ *  - record ID parameter   → rejected by UUID validation before any SQL
+ *  - field values          → carried as R2DBC bind parameters, stored as plain data
+ *  - object api_name       → resolved against metadata only; unknown names fail
+ *                            with ObjectNotFoundException, never reach SQL
+ *
+ * Query Engine surfaces (api_name/field/value injection in SOQL-like queries)
+ * are covered by dev.osc.query.QueryEngineInjectionTest in backend/query-engine.
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SQL Injection Prevention")
@@ -66,14 +75,18 @@ class SqlInjectionPreventionTest {
         rule.check(classes);
     }
 
-    @Test
+    @ParameterizedTest
     @DisplayName("service layer: malicious field value is passed as a bind parameter, not injected")
-    void maliciousValue_treatedAsData_notAsSql() {
+    @ValueSource(strings = {
+            "' OR '1'='1",
+            "'; DROP TABLE record; --",
+            "name': '<injection>', 'extra': '",
+            "\"; INSERT INTO record (tenant_id) VALUES ('evil') --"
+    })
+    void maliciousValue_treatedAsData_notAsSql(String maliciousInput) {
         UUID tenantId = UUID.randomUUID();
         UUID objectId = UUID.randomUUID();
         UUID recordId = UUID.randomUUID();
-
-        String maliciousInput = "'; DROP TABLE record; --";
 
         dev.osc.metadata.ObjectDefinition object =
                 new dev.osc.metadata.ObjectDefinition(objectId, tenantId, "Account",
@@ -130,6 +143,31 @@ class SqlInjectionPreventionTest {
                 .expectError(IllegalArgumentException.class)
                 .verify();
 
+        verifyNoInteractions(recordRepository);
+    }
+
+    @ParameterizedTest
+    @DisplayName("object api_name: a malicious name is only a metadata lookup key — unknown object fails before any record SQL")
+    @ValueSource(strings = {
+            "Project__c' OR 1=1 --",
+            "'; SELECT pg_sleep(5); --"
+    })
+    void maliciousApiName_failsAsUnknownObject_neverReachesRecordSql(String maliciousApiName) {
+        UUID tenantId = UUID.randomUUID();
+        // The api_name is bound as a parameter into the md_object lookup; it matches nothing.
+        when(metadataEngine.findObject(eq(tenantId), anyString())).thenReturn(Mono.empty());
+
+        DefaultDynamicPersistenceService service =
+                new DefaultDynamicPersistenceService(metadataEngine, coercionEngine, recordRepository);
+
+        StepVerifier.create(
+                service.createRecord(maliciousApiName, Map.of("name", "x"))
+                        .contextWrite(ctx -> ctx.put(TenantContext.TENANT_ID_KEY, tenantId.toString()))
+        )
+                .expectError(ObjectNotFoundException.class)
+                .verify();
+
+        // The malicious api_name never reaches the record repository.
         verifyNoInteractions(recordRepository);
     }
 }
