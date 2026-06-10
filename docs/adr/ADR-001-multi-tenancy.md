@@ -56,3 +56,10 @@ Mono<Void> setTenantSession(Connection conn) {
 ## Evolution Path
 
 If a large tenant requires physical isolation, we can migrate that tenant to a dedicated schema or database without changing the logical model. The explicit `tenant_id` in every query makes this migration straightforward.
+
+## Implementation references
+
+- `backend/persistence/src/main/resources/db/migration/V1__initial_metadata_schema.sql` — `ENABLE ROW LEVEL SECURITY` + `tenant_isolation` policies on every data table.
+- `backend/persistence/src/main/java/dev/osc/persistence/R2dbcMetadataRepository.java` — `activateTenant()` sets `app.current_tenant` and every query carries an explicit `WHERE tenant_id = :tenantId` (defense in depth).
+- `backend/api/src/main/java/dev/osc/api/tenant/TenantContextFilter.java` — derives the tenant from the request and propagates it through the Reactor `Context`.
+- `backend/persistence/src/test/java/dev/osc/persistence/TenantIsolationIntegrationTest.java` — proves cross-tenant data cannot leak.

@@ -53,3 +53,10 @@ The `md_field` table carries `storage_kind` ('JSONB' | 'COLUMN') and `storage_ke
 - Field type coercion (TEXT, NUMBER, DATE, BOOLEAN, etc.) is done at the application layer before writing to JSONB.
 - The `Query Engine` handles the translation: `field__c` → `data->>'field__c'` with appropriate PostgreSQL cast.
 - Uniqueness constraints on JSONB fields are enforced at application level (not DB).
+
+## Implementation references
+
+- `backend/persistence/src/main/resources/db/migration/V1__initial_metadata_schema.sql` — `record` table with `data JSONB`, the `idx_record_data_gin` GIN index, and the `idx_record_tenant_object` composite index.
+- `backend/metadata-engine/src/main/java/dev/osc/metadata/StorageKind.java` — the `COLUMN` / `JSONB` enum driving the promotion path; `FieldDefinition.storageKind()` carries it per field.
+- `backend/metadata-engine/src/main/java/dev/osc/metadata/DefaultFieldCoercionEngine.java` — application-level type coercion before writing JSONB.
+- `backend/metadata-engine/src/main/java/dev/osc/metadata/performance/FieldAccessCounter.java` + `HotFieldReport.java` — track hot JSONB fields that are candidates for column promotion.

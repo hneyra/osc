@@ -43,3 +43,9 @@ const iaacStack = new pulumi.StackReference("hneyra/iaac/prod");
 const postgresEndpoint = iaacStack.getOutput("postgresEndpoint");
 const vpcId = iaacStack.getOutput("vpcId");
 ```
+
+## Implementation references
+
+- `infrastructure/index.ts` + `infrastructure/src/{database,compute,networking}.ts` — the Pulumi TypeScript program.
+- `infrastructure/dev/` and `infrastructure/prod/` — the two stacks (`Pulumi.dev.yaml`, etc.).
+- `.github/workflows/ci.yml` — the `deploy-dev` job runs `pulumi up --stack dev` after the image is pushed to ECR.
