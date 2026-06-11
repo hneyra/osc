@@ -96,8 +96,8 @@ class SecurityAcceptanceTest {
      * the Flyway migrations) is up. Plain JDBC: blocking is fine in tests, and the
      * PostgreSQL driver is already on the test runtime classpath via the persistence module.
      */
-    private static void seedPermissionFixtures() throws Exception {
-        if (!SEEDED.compareAndSet(false, true)) {
+    private static synchronized void seedPermissionFixtures() throws Exception {
+        if (SEEDED.get()) {
             return;
         }
         String sql = """
@@ -146,6 +146,7 @@ class SecurityAcceptanceTest {
              Statement stmt = conn.createStatement()) {
             stmt.execute(sql);
         }
+        SEEDED.set(true);
     }
 
     // ── Vector 1: list records ────────────────────────────────────────────────
