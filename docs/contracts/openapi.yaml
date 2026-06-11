@@ -1,0 +1,140 @@
+openapi: 3.0.1
+info:
+  title: OSC Dynamic API
+  description: >-
+    Runtime-configurable multi-tenant business application engine. Every object
+    (Account, Contact, custom objects) is served by the same dynamic endpoints —
+    there are no hardcoded per-entity controllers. `{objectApiName}` is resolved
+    against tenant metadata at request time.
+  version: 1.0.0-Phase2
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+tags:
+  - name: records
+    description: Dynamic CRUD + SOQL-like query over any metadata-defined object.
+paths:
+  /api/v1/data/{objectApiName}:
+    get:
+      tags: [records]
+      summary: List records of an object
+      operationId: listRecords
+      parameters:
+        - { name: objectApiName, in: path, required: true, schema: { type: string } }
+        - { name: limit,  in: query, required: false, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
+      responses:
+        "200": { description: Records envelope, content: { application/json: { schema: { $ref: "#/components/schemas/RecordResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [records]
+      summary: Create a record
+      operationId: createRecord
+      parameters:
+        - { name: objectApiName, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RecordData" } } }
+      responses:
+        "201": { description: Created record, content: { application/json: { schema: { $ref: "#/components/schemas/RecordData" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: Field validation failed }
+  /api/v1/data/{objectApiName}/{id}:
+    get:
+      tags: [records]
+      summary: Get a record by id
+      operationId: getRecord
+      parameters:
+        - { name: objectApiName, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: The record, content: { application/json: { schema: { $ref: "#/components/schemas/RecordData" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [records]
+      summary: Partially update a record
+      operationId: updateRecord
+      parameters:
+        - { name: objectApiName, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RecordData" } } }
+      responses:
+        "200": { description: Updated record, content: { application/json: { schema: { $ref: "#/components/schemas/RecordData" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [records]
+      summary: Delete a record
+      operationId: deleteRecord
+      parameters:
+        - { name: objectApiName, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/v1/data/{objectApiName}/query:
+    post:
+      tags: [records]
+      summary: Execute a SOQL-like query
+      operationId: queryRecords
+      parameters:
+        - { name: objectApiName, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string, example: "SELECT name, industry__c FROM Account WHERE industry__c = 'Technology' ORDER BY name ASC LIMIT 50" }
+      responses:
+        "200": { description: Query result envelope, content: { application/json: { schema: { $ref: "#/components/schemas/RecordResponse" } } } }
+        "400": { description: Invalid query (parse error / unknown field) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        JWT Bearer token. In Phase 1/4 the X-Tenant-ID and X-User-ID headers are used
+        as stand-ins until the auth phase lands.
+  responses:
+    Unauthorized: { description: Missing/invalid tenant or user identity }
+    Forbidden:    { description: Caller lacks permission on the object }
+    NotFound:     { description: Object or record not found }
+  schemas:
+    RecordData:
+      type: object
+      description: A record as a flat map of field api_name -> value (system fields + JSONB fields).
+      additionalProperties: true
+      example:
+        id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        objectId: "00000000-0000-0000-0001-000000000001"
+        name: "Acme Corp"
+        industry__c: "Technology"
+        createdAt: "2026-06-11T00:00:00Z"
+        updatedAt: "2026-06-11T00:00:00Z"
+    RecordResponse:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/RecordData" } }
+        totalCount: { type: integer, format: int64 }
+        limit: { type: integer }
+        offset: { type: integer }
+        objectApiName: { type: string }
