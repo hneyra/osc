@@ -1,6 +1,8 @@
 package dev.osc.api.record;
 
 import dev.osc.api.OscApplication;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,9 +55,18 @@ class DynamicRecordControllerIntegrationTest {
         registry.add("spring.r2dbc.url", () -> POSTGRES.getJdbcUrl().replace("jdbc:", "r2dbc:"));
         registry.add("spring.r2dbc.username", POSTGRES::getUsername);
         registry.add("spring.r2dbc.password", POSTGRES::getPassword);
-        registry.add("spring.flyway.url", POSTGRES::getJdbcUrl);
-        registry.add("spring.flyway.user", POSTGRES::getUsername);
-        registry.add("spring.flyway.password", POSTGRES::getPassword);
+        // The schema is created by runMigrations() below; don't also let the app run Flyway.
+        registry.add("spring.flyway.enabled", () -> "false");
+    }
+
+    @BeforeAll
+    static void runMigrations() {
+        // Apply the real production migrations (schema + RLS + Account/Contact seed) before the
+        // app handles requests — the app itself is R2DBC-only and does not run Flyway on startup.
+        Flyway.configure()
+                .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .load()
+                .migrate();
     }
 
     @LocalServerPort
