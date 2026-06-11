@@ -24,4 +24,11 @@ dependencies {
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.projectreactor:reactor-test")
+    // For seeding permission fixtures via DatabaseClient in the controller integration test.
+    testImplementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
+    // Integration tests run the real Flyway migrations (packaged in the persistence module)
+    // against Testcontainers before the app handles requests.
+    testImplementation("org.flywaydb:flyway-core")
+    testImplementation("org.flywaydb:flyway-database-postgresql")
+    testRuntimeOnly("org.postgresql:postgresql")
 }
