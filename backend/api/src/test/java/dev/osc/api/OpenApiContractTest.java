@@ -56,6 +56,11 @@ class OpenApiContractTest {
                 .migrate();
     }
 
+    // The tenant/user WebFilters gate every request (incl. the docs), so valid UUID headers are
+    // required even for /v3/api-docs. The doc endpoint itself performs no permission checks.
+    private static final String TENANT_ID = "00000000-0000-0000-0000-000000000001";
+    private static final String USER_ID = "dddddddd-0000-0000-0000-000000000000";
+
     @LocalServerPort
     int port;
 
@@ -66,12 +71,14 @@ class OpenApiContractTest {
         http = WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
                 .responseTimeout(Duration.ofSeconds(30))
+                .defaultHeader("X-Tenant-ID", TENANT_ID)
+                .defaultHeader("X-User-ID", USER_ID)
                 .build();
     }
 
-    private static final String LIST = "$.paths.['/api/v1/data/{objectApiName}']";
-    private static final String BY_ID = "$.paths.['/api/v1/data/{objectApiName}/{id}']";
-    private static final String QUERY = "$.paths.['/api/v1/data/{objectApiName}/query']";
+    private static final String LIST = "$.paths['/api/v1/data/{objectApiName}']";
+    private static final String BY_ID = "$.paths['/api/v1/data/{objectApiName}/{id}']";
+    private static final String QUERY = "$.paths['/api/v1/data/{objectApiName}/query']";
 
     @Test
     @DisplayName("/v3/api-docs is a valid OpenAPI document with the expected metadata + security scheme")
