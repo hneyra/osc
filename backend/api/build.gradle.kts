@@ -24,4 +24,6 @@ dependencies {
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.projectreactor:reactor-test")
+    // For seeding permission fixtures via DatabaseClient in the controller integration test.
+    testImplementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
 }
