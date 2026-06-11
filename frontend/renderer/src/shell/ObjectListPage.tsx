@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useFieldDefinitions, useRecordList } from '@/api/hooks'
 import { ListViewRenderer } from '@/renderer/ListViewRenderer'
