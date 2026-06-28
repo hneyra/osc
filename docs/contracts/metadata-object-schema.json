@@ -56,7 +56,7 @@
             "PICKLIST", "MULTIPICKLIST",
             "LOOKUP", "MASTER_DETAIL",
             "EMAIL", "URL", "PHONE",
-            "AUTO_NUMBER", "FORMULA"
+            "AUTO_NUMBER", "FORMULA", "ROLLUP"
           ]
         },
         "isRequired": {

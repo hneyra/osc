@@ -9,9 +9,18 @@
 
 ## 0. Resumen ejecutivo
 
-Estamos construyendo una **PaaS/SaaS multi-tenant** que funciona como un *motor de aplicaciones de negocio configurable en runtime*. No es un CRM: es la plataforma sobre la que se podrían construir CRMs, ERPs, gestores de proyectos o cualquier aplicación de datos de negocio, sin redesplegar código.
+Estamos construyendo **osc-platform**, un **ERP Cloud & AI-Native** multi-tenant que funciona como un *motor de aplicaciones de negocio configurable en runtime*. No es un CRM: es la plataforma sobre la que se podrían construir CRMs, ERPs, gestores de proyectos o cualquier aplicación de datos de negocio, sin redesplegar código.
 
 La idea central, heredada de cómo funciona Salesforce internamente, es que **casi todo es metadata interpretada en runtime**, no clases compiladas. Cuando un usuario crea un objeto, un campo o una regla, se escriben registros de metadata que el motor lee dinámicamente; no hay release de por medio.
+
+### osc-platform: alcance ERP Cloud & AI-Native
+
+A partir de 2026-06-28 el proyecto se reposiciona explícitamente como un ERP Cloud & AI-Native, lo cual añade dos capacidades núcleo sobre la base de Fase 0, documentadas en ADR-005 y ADR-006 y detalladas en `docs/ARCHITECTURE.md`:
+
+1. **Modelo de datos extendido estilo Salesforce**: Record Types, Page Layouts por record type/perfil, relaciones Lookup/Master-Detail/Many-to-Many, campos Formula y Rollup — ver ADR-006 y §4.4.
+2. **Kotlin Scripting Engine** (equivalente a Apex): Triggers, clases de servicio, Invocable Actions, Batch y Scheduled jobs escritos en Kotlin, compilados y cacheados, ejecutados en sandbox fuera del event loop reactivo — ver ADR-005 y §7.1. El AI Assistant puede generar, revisar y depurar estos scripts, siempre con confirmación humana antes de activarlos (§8).
+
+**Esto no cambia ninguna decisión no-negociable existente.** El stack reactivo (Java 25, Spring WebFlux, R2DBC, sin `.block()` en el event loop) se mantiene intacto — Kotlin Scripting es una capacidad de *user-code* adicional, ejecutada en `Schedulers.boundedElastic()`, no un reemplazo del backend Java/reactivo. Ver ADR-005 §"Why Kotlin Scripting fits the non-negotiable reactive stack".
 
 ### Decisiones ya tomadas
 
@@ -27,6 +36,8 @@ La idea central, heredada de cómo funciona Salesforce internamente, es que **ca
 | Infra | Pulumi TypeScript | IaC tipado; reutiliza servicios de hneyra/iaac |
 | Customización (orden) | Objetos/campos → relaciones → vistas/layouts → permisos → validaciones → flujos | Por valor y complejidad creciente |
 | Código de usuario | Sí, vía sandbox seguro (ver §7) | Requisito; máxima extensibilidad |
+| Lenguaje de user-code | **Kotlin Scripting** (ADR-005) | Apex-equivalente; compila/cachea en `boundedElastic`, no toca el event loop |
+| Modelo de datos extendido | Record Types, relaciones Lookup/Master-Detail/M2M, campos Formula/Rollup (ADR-006) | Paridad ERP estilo Salesforce |
 | Escala | Decenas de tenants, miles de registros (crecer) | No optimizar prematuramente |
 | Integraciones | APIs REST entrada/salida + webhooks | Requisito |
 | Equipo | Solo al inicio, crece después | Plan modular para incorporar gente |
@@ -231,6 +242,54 @@ CREATE INDEX idx_record_data_gin      ON record USING GIN (data jsonb_path_ops);
 
 Empezar con **tabla universal + JSONB**. No hay DDL dinámico en runtime. El campo `storage_kind`/`storage_key` en `md_field` permite promover campos calientes a columnas reales vía Flyway migration en el futuro, sin romper la API.
 
+### 4.4 Modelo de datos extendido (ERP — ADR-006)
+
+Tablas adicionales, todas aditivas (no rompen Fase 0), detalladas en ADR-006:
+
+```sql
+-- Relaciones entre objetos: Lookup, Master-Detail, Many-to-Many
+CREATE TABLE md_relationship (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id           UUID NOT NULL REFERENCES tenant(id),
+    relationship_type   TEXT NOT NULL, -- 'LOOKUP' | 'MASTER_DETAIL' | 'MANY_TO_MANY'
+    child_object_id     UUID NOT NULL REFERENCES md_object(id),
+    parent_object_id    UUID NOT NULL REFERENCES md_object(id),
+    field_id            UUID REFERENCES md_field(id),
+    junction_object_id  UUID REFERENCES md_object(id),
+    on_delete           TEXT NOT NULL DEFAULT 'RESTRICT',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Record Types
+CREATE TABLE md_record_type (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES tenant(id),
+    object_id   UUID NOT NULL REFERENCES md_object(id),
+    api_name    TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    is_default  BOOLEAN NOT NULL DEFAULT false,
+    is_active   BOOLEAN NOT NULL DEFAULT true,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, object_id, api_name)
+);
+
+-- Asignación de Page Layout por record type / permission set
+CREATE TABLE md_layout_assignment (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         UUID NOT NULL REFERENCES tenant(id),
+    layout_id         UUID NOT NULL REFERENCES md_layout(id),
+    record_type_id    UUID REFERENCES md_record_type(id),
+    permission_set_id UUID REFERENCES permission_set(id),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, record_type_id, permission_set_id)
+);
+
+-- record gana una columna nullable (no rompe objetos sin record types)
+ALTER TABLE record ADD COLUMN record_type_id UUID REFERENCES md_record_type(id);
+```
+
+`md_field.field_type` gana `FORMULA` y `ROLLUP`, con `config` JSONB propio (expresión DSL para `FORMULA`; relación + agregación + filtro para `ROLLUP`). `FORMULA` se calcula en lectura (Query Engine); `ROLLUP` se recalcula de forma asíncrona vía el pipeline de outbox/AFTER (§6.2 paso 8) — nunca en el path síncrono de escritura. Ver ADR-006 para el detalle completo y los contratos JSON Schema asociados.
+
 ---
 
 ## 5. Query Engine (tipo SOQL)
@@ -266,12 +325,27 @@ Las reglas de validación y los flujos declarativos usan un **DSL de expresiones
 
 ## 7. Código de usuario (user-code)
 
-**Recomendación para v1:** empezar por DSL/scripting controlado (opción A), diseñar el `UserCodeExecutor` como un puerto para enchufar WASM o microVM en el futuro. Reglas transversales:
+Reglas transversales (sin cambios):
 
 - Límites duros de CPU, memoria, tiempo de ejecución y profundidad de recursión.
 - Sin acceso de red, disco ni reflexión desde el código de usuario; solo un API controlada (`ExecutionContext`).
 - Ejecución siempre con los permisos del usuario, nunca con permisos elevados.
 - Auditoría completa de cada ejecución.
+
+El `UserCodeExecutor` sigue siendo un puerto — permite enchufar WASM/microVM en el futuro sin tocar los llamadores (ver ADR-005 §"Future Work").
+
+### 7.1 Kotlin Scripting Engine (ADR-005)
+
+El punto abierto #1 de §13 ("lenguaje de user-code") está resuelto: **Kotlin Scripting** es la implementación del `UserCodeExecutor` para lógica imperativa (Triggers, clases tipo Apex, Invocable Actions, Batch jobs, Scheduled jobs). El evaluador DSL de §6.1 **no se reemplaza** — sigue siendo el motor para Validation Rules y automatizaciones declarativas simples, porque un intérprete de gramática whitelisteada es más seguro que un lenguaje general-purpose para ese 90% de los casos.
+
+```
+Validation Rules, automatizaciones simples  → DSL de expresiones (§6.1, sin cambios)
+Triggers, Invocable Actions, Batch, Scheduled → Kotlin Scripting (ADR-005)
+```
+
+**Compatibilidad con el stack reactivo no-negociable:** compilar y ejecutar un script Kotlin es, por diseño, una operación bloqueante de la JVM. El motor nunca ejecuta esto en el event loop: toda compilación/ejecución corre en `Schedulers.boundedElastic()` con timeout duro (5s por defecto, configurable hasta 30s). Es la única excepción documentada a la regla "nunca `.block()`" (NNG-004), acotada exclusivamente al módulo `backend/kotlin-scripting` y auditada por una regla ArchUnit dedicada (`KotlinScriptingBlockingIsolationRule`). Ver ADR-005 para el detalle de compilación+caché, sandbox de 3 niveles (allowlist de imports en compile-time, classloader restringido por tenant, guardas de runtime para CPU/memoria/recursión), la API de `ExecutionContext`/`RecordOperations` expuesta a los scripts, y ejemplos (Trigger, Batch, Invocable Action).
+
+Cada ejecución se audita en `script_execution_log` (tenant_id, script_id, contexto de trigger, duración, resultado, líneas de log) — misma disciplina que `automation_audit_log`.
 
 ---
 
@@ -282,8 +356,9 @@ Usos previstos, todos **fuera del path crítico**:
 1. **NL → metadata:** genera la metadata como propuesta que el usuario confirma.
 2. **NL → query:** preguntas en lenguaje natural → Query Engine DSL (con permisos del usuario).
 3. **Asistencia contextual:** ayuda al construir reglas/flujos, sugerencias de campos.
+4. **NL → Kotlin script:** genera, revisa y depura scripts Kotlin (Triggers, Batch, Invocable Actions) contra la API documentada de `ExecutionContext`. El flujo: generar → compilar en modo check (sin ejecutar) → análisis estático (allowlist de imports, APIs prohibidas, heurística de timeout) → propuesta mostrada al usuario → el usuario aprueba/edita en el Script Editor → guardado con `is_active = false` → activación explícita humana. Ver ADR-005 §"AI integration".
 
-**Principios:** la IA propone, el motor dispone. Toda salida de la IA que modifique el sistema pasa por validación de esquema y confirmación humana.
+**Principios:** la IA propone, el motor dispone. Toda salida de la IA que modifique el sistema pasa por validación de esquema y confirmación humana. Un script generado por IA **nunca** se activa automáticamente — pasa por el mismo pipeline de compilación/sandbox/activación que un script escrito por un humano.
 
 ---
 
@@ -337,6 +412,7 @@ Usos previstos, todos **fuera del path crítico**:
 │   ├── query-engine/
 │   ├── automation/
 │   ├── security/
+│   ├── kotlin-scripting/  # Kotlin Scripting Engine: compiler service, cache, sandbox (ADR-005)
 │   ├── api/
 │   ├── ai/
 │   └── integrations/
@@ -344,6 +420,7 @@ Usos previstos, todos **fuera del path crítico**:
 │   ├── design-system/
 │   ├── renderer/
 │   ├── admin/
+│   ├── script-editor/    # Editor Monaco para Kotlin Scripting (autocompletado, lint, validación)
 │   └── runtime/
 └── infrastructure/       # Pulumi TypeScript
 ```
@@ -385,7 +462,8 @@ Usos previstos, todos **fuera del path crítico**:
 - Coerción y validación de tipos de campo.
 - RLS activo + filtro de aplicación.
 - Tenant context en Reactor Context.
-- **Aceptación:** suite de tests exhaustiva (incluye aislamiento entre tenants).
+- **Extensión ERP (ADR-006):** `md_relationship` (Lookup/Master-Detail/M2M), cascade delete transaccional para Master-Detail, `record.record_type_id`.
+- **Aceptación:** suite de tests exhaustiva (incluye aislamiento entre tenants y `MasterDetailCascadeIntegrationTest`).
 
 ### Fase 2 — Query Engine + API dinámica
 - Parser de consultas lógicas → SQL parametrizado vía R2DBC.
@@ -402,18 +480,21 @@ Usos previstos, todos **fuera del path crítico**:
 ### Fase 4 — Seguridad y permisos
 - Profiles / permission sets en metadata.
 - FLS + RLS en Query Engine y API.
-- **Aceptación:** un usuario sin permiso a un campo nunca lo ve.
+- **Extensión ERP (ADR-006):** Record Types, `md_layout_assignment` (resolución de Page Layout por record type/perfil), campos Formula (cálculo en lectura) y Rollup (recálculo asíncrono vía outbox/AFTER).
+- **Aceptación:** un usuario sin permiso a un campo nunca lo ve; un record type resuelve el layout correcto según perfil.
 
 ### Fase 5 — Automation engine
 - DSL de expresiones seguro.
 - `UserCodeExecutor` (puerto) + implementación sandbox.
 - Outbox + eventos.
-- **Aceptación:** regla de validación bloquea guardado inválido; flujo modifica campo; user-code corre con límites.
+- **Kotlin Scripting Engine (ADR-005):** `backend/kotlin-scripting` — compiler service + `CompiledScriptCache` (Caffeine, tenant-scoped), sandbox de 3 niveles, `ExecutionContext`/`RecordOperations`, ejecución en `Schedulers.boundedElastic()` con timeout duro. Triggers, Batch jobs, Scheduled jobs, Invocable Actions.
+- **Aceptación:** regla de validación bloquea guardado inválido; flujo modifica campo; user-code (DSL y Kotlin Scripting) corre con límites; ningún `.block()` fuera de las clases designadas en `kotlin-scripting` (verificado por `KotlinScriptingBlockingIsolationRule`).
 
 ### Fase 6 — Integraciones + capa de IA
 - Webhooks salientes con reintentos/HMAC.
 - Spring AI: NL→metadata y NL→query.
-- **Aceptación:** evento dispara webhook firmado; NL genera metadata válida con confirmación.
+- **AI → Kotlin script (ADR-005):** generación, compile-check, análisis estático y propuesta de scripts; Script Editor (Monaco) en `frontend/script-editor` para revisión/edición humana antes de activar.
+- **Aceptación:** evento dispara webhook firmado; NL genera metadata válida con confirmación; NL genera un script Kotlin que compila y queda pendiente de activación humana.
 
 ### Fase 7 — Endurecimiento y multi-equipo
 - Observabilidad (logs estructurados, métricas, trazas).
@@ -425,8 +506,10 @@ Usos previstos, todos **fuera del path crítico**:
 
 ## 13. Puntos abiertos
 
-1. Lenguaje de user-code (Fase 5): DSL propio vs. scripting embebido vs. WASM.
+1. ~~Lenguaje de user-code (Fase 5): DSL propio vs. scripting embebido vs. WASM.~~ **Resuelto:** Kotlin Scripting para lógica imperativa, DSL para reglas/automatizaciones simples — ver ADR-005. WASM/microVM queda como evolución futura si la aislación por classloader/JVM resulta insuficiente.
 2. Cola de eventos: outbox+worker suficiente, o Redis/Kafka desde antes.
 3. GraphQL: además de REST.
 4. Caché distribuida: cuándo Redis.
 5. Versionado de metadata: historial/rollback de cambios de configuración.
+6. Aislación de classloader por tenant a escala: ¿eviction policy de scripts compilados si la presión de metaspace se vuelve un problema? (ver ADR-005, riesgo de "Future Work").
+7. Fórmulas cross-object (referencias a campos del objeto padre vía Lookup): fuera de alcance v1 (ADR-006) — evaluar si surge un caso de uso real.

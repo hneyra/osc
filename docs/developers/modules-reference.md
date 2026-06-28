@@ -4,12 +4,13 @@ OSC uses a Gradle multi-project structure. Each module has a single responsibili
 
 ```
 api → security, automation, query-engine, ai, integrations
-automation → persistence, query-engine, security
+automation → persistence, query-engine, security, kotlin-scripting
+kotlin-scripting → persistence, query-engine, metadata-engine
 query-engine → metadata-engine
 security → metadata-engine
 persistence → metadata-engine
 integrations → persistence, automation
-ai → (Spring AI only)
+ai → (Spring AI only), kotlin-scripting (compile-check only, for script proposals)
 metadata-engine → (no OSC deps)
 ```
 
@@ -171,6 +172,29 @@ flowchart TD
 - Delivers to `WebhookDeliveryService` with exponential backoff
 - Events transition: `PENDING` → `DELIVERED` | `RETRY` → `DEAD_LETTER`
 - Audit logged via `AuditLogger` for every automation execution
+
+---
+
+## `kotlin-scripting`
+
+**Purpose:** Compile, cache, sandbox, and execute Kotlin Scripting user-code (Triggers, Batch jobs, Scheduled jobs, Invocable Actions) — the `UserCodeExecutor` implementation for imperative logic. Full design in **ADR-005**.
+
+**Key types:**
+
+| Type | Description |
+|---|---|
+| `KotlinScriptCompilerService` | Compiles source against a restricted `ScriptCompilationConfiguration` (import allowlist) |
+| `CompiledScriptCache` | Caffeine, tenant-scoped, keyed by `(tenant_id, script_id, contentHash)` |
+| `ScriptSandbox` | Per-tenant restricted `URLClassLoader` + runtime guard (timeout, CPU sampling, heap check, recursion depth) |
+| `ExecutionContext` | Synchronous facade exposed to scripts — `records()`, `log()`, `now()`, `trigger` |
+| `RecordOperations` | Synchronous CRUD/query facade over `DynamicPersistenceService`/`QueryEngine`, same FLS/RLS as the REST path |
+| `ScriptExecutionAuditor` | Writes `script_execution_log` in the same transaction as the triggering record write |
+
+**Rules:**
+- This is the **only** module allowed to call `.block()` — and only inside classes scheduled on `Schedulers.boundedElastic()`. Enforced by `KotlinScriptingBlockingIsolationRule` (ArchUnit, scoped to this module).
+- Scripts are compiled **on save**, never per-execution. A script cannot be activated (`md_script.is_active = true`) while `compile_errors` is non-empty.
+- No script gets the raw R2DBC `DatabaseClient`, JWT secrets, network, filesystem, or reflection — only the `ExecutionContext` facade.
+- Every execution runs with the invoking user's `SecurityContext` — object/field/record permissions are never bypassable from script code.
 
 ---
 

@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osc.dev/schemas/metadata-script",
+  "title": "ScriptDefinition",
+  "description": "Schema for a Kotlin Scripting user-code unit (ADR-005): Trigger, Batch job, Scheduled job, or Invocable Action. A script can never be activated (isActive=true) while compileErrors is non-empty.",
+  "type": "object",
+  "required": ["objectApiName", "kind", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "id":             { "type": "string", "format": "uuid" },
+    "tenantId":       { "type": "string", "format": "uuid" },
+    "objectApiName":  { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(__c)?$" },
+    "kind": {
+      "type": "string",
+      "enum": ["TRIGGER", "BATCH", "SCHEDULED", "INVOCABLE_ACTION"]
+    },
+    "triggerEvent": {
+      "type": ["string", "null"],
+      "enum": ["BEFORE_INSERT", "BEFORE_UPDATE", "BEFORE_DELETE", "AFTER_INSERT", "AFTER_UPDATE", "AFTER_DELETE", "AFTER_UNDELETE", null],
+      "description": "Required when kind is TRIGGER, otherwise null."
+    },
+    "invocableName": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "description": "Required when kind is INVOCABLE_ACTION — the name callable from declarative Flows/automations."
+    },
+    "scheduleCron": {
+      "type": ["string", "null"],
+      "description": "Required when kind is SCHEDULED — standard cron expression."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Kotlin source. Compiled and cached on save (ADR-005) — never recompiled per execution."
+    },
+    "isActive": {
+      "type": "boolean",
+      "default": false,
+      "description": "Can only be set true after a clean compile. AI-generated scripts default to false and require explicit human activation."
+    },
+    "compiledAt":     { "type": ["string", "null"], "format": "date-time" },
+    "compileErrors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Non-empty blocks activation."
+    },
+    "timeoutSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30,
+      "default": 5,
+      "description": "Tenant can only tighten this below the platform default, never loosen beyond the hard ceiling (30s)."
+    },
+    "generatedByAi": {
+      "type": "boolean",
+      "default": false,
+      "description": "Audit flag — true if this script's source originated from an AI proposal (ADR-005 'AI integration')."
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "TRIGGER" } } },
+      "then": { "required": ["triggerEvent"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "INVOCABLE_ACTION" } } },
+      "then": { "required": ["invocableName"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "SCHEDULED" } } },
+      "then": { "required": ["scheduleCron"] }
+    },
+    {
+      "if": { "properties": { "isActive": { "const": true } } },
+      "then": { "properties": { "compileErrors": { "maxItems": 0 } } }
+    }
+  ]
+}
