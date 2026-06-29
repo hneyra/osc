@@ -14,6 +14,11 @@ dependencies {
 
     implementation("org.springframework.boot:spring-boot-starter-webflux")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    // Boot 4 moved Flyway auto-configuration out of spring-boot-autoconfigure; without this
+    // starter the app boots without running the db/migration scripts.
+    implementation("org.springframework.boot:spring-boot-starter-flyway")
+    // PostgreSQL dialect support + JDBC driver for the Flyway datasource come in
+    // transitively from :backend:persistence (flyway-database-postgresql, postgresql).
     implementation("org.springdoc:springdoc-openapi-starter-webflux-ui:2.8.9")
 
     // AWS SDK — Secrets Manager integration (#60)
