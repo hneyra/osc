@@ -63,6 +63,61 @@ public class R2dbcMetadataRepository implements MetadataRepository {
                         .all());
     }
 
+    // ── ADR-006: Extended Metadata ───────────────────────────────────────────
+
+    @Override
+    public Flux<RelationshipDefinition> findRelationships(UUID tenantId, UUID objectId) {
+        return activateTenant(tenantId)
+                .thenMany(client.sql("""
+                        SELECT id, tenant_id, relationship_type,
+                               child_object_id, parent_object_id,
+                               field_id, junction_object_id, on_delete, created_at
+                        FROM md_relationship
+                        WHERE tenant_id = :tenantId
+                          AND (child_object_id = :objectId OR parent_object_id = :objectId)
+                        ORDER BY created_at
+                        """)
+                        .bind("tenantId", tenantId)
+                        .bind("objectId", objectId)
+                        .map((row, meta) -> toRelationshipDefinition(row))
+                        .all());
+    }
+
+    @Override
+    public Flux<RecordTypeDefinition> findRecordTypes(UUID tenantId, UUID objectId) {
+        return activateTenant(tenantId)
+                .thenMany(client.sql("""
+                        SELECT id, tenant_id, object_id, api_name, label,
+                               is_default, is_active, created_at
+                        FROM md_record_type
+                        WHERE tenant_id = :tenantId AND object_id = :objectId
+                        ORDER BY is_default DESC, api_name
+                        """)
+                        .bind("tenantId", tenantId)
+                        .bind("objectId", objectId)
+                        .map((row, meta) -> toRecordTypeDefinition(row))
+                        .all());
+    }
+
+    @Override
+    public Flux<LayoutAssignmentDefinition> findLayoutAssignments(UUID tenantId, UUID objectId) {
+        return activateTenant(tenantId)
+                .thenMany(client.sql("""
+                        SELECT la.id, la.tenant_id, la.layout_id,
+                               la.record_type_id, la.permission_set_id, la.created_at
+                        FROM md_layout_assignment la
+                        JOIN md_layout l ON l.id = la.layout_id
+                        WHERE la.tenant_id = :tenantId
+                          AND l.object_id  = :objectId
+                        """)
+                        .bind("tenantId", tenantId)
+                        .bind("objectId", objectId)
+                        .map((row, meta) -> toLayoutAssignmentDefinition(row))
+                        .all());
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
     private Mono<Void> activateTenant(UUID tenantId) {
         return client.sql("SELECT set_config('app.current_tenant', :tenantId, false)")
                 .bind("tenantId", tenantId.toString())
@@ -99,6 +154,44 @@ public class R2dbcMetadataRepository implements MetadataRepository {
                 row.get("config", String.class),
                 row.get("created_at", Instant.class),
                 row.get("updated_at", Instant.class)
+        );
+    }
+
+    private RelationshipDefinition toRelationshipDefinition(Row row) {
+        return new RelationshipDefinition(
+                row.get("id", UUID.class),
+                row.get("tenant_id", UUID.class),
+                row.get("child_object_id", UUID.class),
+                row.get("parent_object_id", UUID.class),
+                row.get("relationship_type", String.class),
+                row.get("field_id", UUID.class),
+                row.get("junction_object_id", UUID.class),
+                row.get("on_delete", String.class),
+                row.get("created_at", Instant.class)
+        );
+    }
+
+    private RecordTypeDefinition toRecordTypeDefinition(Row row) {
+        return new RecordTypeDefinition(
+                row.get("id", UUID.class),
+                row.get("tenant_id", UUID.class),
+                row.get("object_id", UUID.class),
+                row.get("api_name", String.class),
+                row.get("label", String.class),
+                Boolean.TRUE.equals(row.get("is_default", Boolean.class)),
+                Boolean.TRUE.equals(row.get("is_active", Boolean.class)),
+                row.get("created_at", Instant.class)
+        );
+    }
+
+    private LayoutAssignmentDefinition toLayoutAssignmentDefinition(Row row) {
+        return new LayoutAssignmentDefinition(
+                row.get("id", UUID.class),
+                row.get("tenant_id", UUID.class),
+                row.get("layout_id", UUID.class),
+                row.get("record_type_id", UUID.class),
+                row.get("permission_set_id", UUID.class),
+                row.get("created_at", Instant.class)
         );
     }
 }

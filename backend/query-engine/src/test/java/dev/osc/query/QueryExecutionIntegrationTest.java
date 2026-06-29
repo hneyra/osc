@@ -4,6 +4,9 @@ import dev.osc.metadata.FieldDefinition;
 import dev.osc.metadata.MetadataEngine;
 import dev.osc.metadata.MetadataRepository;
 import dev.osc.metadata.ObjectDefinition;
+import dev.osc.metadata.RelationshipDefinition;
+import dev.osc.metadata.RecordTypeDefinition;
+import dev.osc.metadata.LayoutAssignmentDefinition;
 import dev.osc.persistence.R2dbcMetadataRepository;
 import io.r2dbc.spi.ConnectionFactories;
 import io.r2dbc.spi.ConnectionFactory;
@@ -198,6 +201,47 @@ class QueryExecutionIntegrationTest {
         @Override
         public void recordFieldAccess(UUID tenantId, String objectApiName, String fieldApiName) {
             // no-op
+        }
+
+        @Override
+        public Flux<RelationshipDefinition> getRelationships(UUID tenantId, UUID objectId) {
+            return repository.findRelationships(tenantId, objectId);
+        }
+
+        @Override
+        public Flux<RecordTypeDefinition> getRecordTypes(UUID tenantId, UUID objectId) {
+            return repository.findRecordTypes(tenantId, objectId);
+        }
+
+        @Override
+        public Mono<LayoutAssignmentDefinition> resolveLayoutAssignment(
+                UUID tenantId, UUID objectId, UUID recordTypeId, UUID permissionSetId) {
+            return repository.findLayoutAssignments(tenantId, objectId)
+                    .collectList()
+                    .flatMap(assignments -> {
+                        java.util.Optional<LayoutAssignmentDefinition> p1 = assignments.stream()
+                                .filter(a -> java.util.Objects.equals(a.recordTypeId(), recordTypeId)
+                                        && java.util.Objects.equals(a.permissionSetId(), permissionSetId))
+                                .findFirst();
+                        if (p1.isPresent()) return Mono.just(p1.get());
+
+                        java.util.Optional<LayoutAssignmentDefinition> p2 = assignments.stream()
+                                .filter(a -> java.util.Objects.equals(a.recordTypeId(), recordTypeId)
+                                        && a.permissionSetId() == null)
+                                .findFirst();
+                        if (p2.isPresent()) return Mono.just(p2.get());
+
+                        java.util.Optional<LayoutAssignmentDefinition> p3 = assignments.stream()
+                                .filter(a -> a.recordTypeId() == null
+                                        && java.util.Objects.equals(a.permissionSetId(), permissionSetId))
+                                .findFirst();
+                        if (p3.isPresent()) return Mono.just(p3.get());
+
+                        java.util.Optional<LayoutAssignmentDefinition> p4 = assignments.stream()
+                                .filter(a -> a.recordTypeId() == null && a.permissionSetId() == null)
+                                .findFirst();
+                        return p4.map(Mono::just).orElseGet(Mono::empty);
+                    });
         }
     }
 }

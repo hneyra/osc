@@ -54,6 +54,21 @@ class MetadataCachePropertiesTest {
             public reactor.core.publisher.Flux<FieldDefinition> findFields(java.util.UUID tenantId, java.util.UUID objectId) {
                 return reactor.core.publisher.Flux.empty();
             }
+
+            @Override
+            public reactor.core.publisher.Flux<RelationshipDefinition> findRelationships(java.util.UUID tenantId, java.util.UUID objectId) {
+                return reactor.core.publisher.Flux.empty();
+            }
+
+            @Override
+            public reactor.core.publisher.Flux<RecordTypeDefinition> findRecordTypes(java.util.UUID tenantId, java.util.UUID objectId) {
+                return reactor.core.publisher.Flux.empty();
+            }
+
+            @Override
+            public reactor.core.publisher.Flux<LayoutAssignmentDefinition> findLayoutAssignments(java.util.UUID tenantId, java.util.UUID objectId) {
+                return reactor.core.publisher.Flux.empty();
+            }
         };
 
         // Must build without error; runtime behaviour is covered by CaffeineMetadataEngineTest.

@@ -25,4 +25,36 @@ public interface MetadataEngine {
      * Implementations may delegate to an in-memory counter or other store.
      */
     void recordFieldAccess(UUID tenantId, String objectApiName, String fieldApiName);
+
+    // ── ADR-006: Extended Metadata ──────────────────────────────────────────
+
+    /**
+     * Returns all relationships where the given object participates (as child or parent).
+     * Results are cached per (tenantId, objectId) and invalidated on write.
+     */
+    Flux<RelationshipDefinition> getRelationships(UUID tenantId, UUID objectId);
+
+    /**
+     * Returns all record types for the given object, default-first then alphabetical.
+     * Results are cached per (tenantId, objectId) and invalidated on write.
+     */
+    Flux<RecordTypeDefinition> getRecordTypes(UUID tenantId, UUID objectId);
+
+    /**
+     * Resolves which layout to show for a record, implementing the most-specific-wins
+     * priority order defined in {@code metadata-layout-assignment-schema.json}:
+     * <ol>
+     *   <li>(recordTypeId, permissionSetId) — both specified</li>
+     *   <li>(recordTypeId, null) — record-type match, any profile</li>
+     *   <li>(null, permissionSetId) — any record type, profile match</li>
+     *   <li>(null, null) — object default</li>
+     * </ol>
+     * Returns empty if no assignment exists for this object.
+     *
+     * @param recordTypeId   the record type of the current record (may be null)
+     * @param permissionSetId the caller's permission set (may be null)
+     */
+    Mono<LayoutAssignmentDefinition> resolveLayoutAssignment(
+            UUID tenantId, UUID objectId, UUID recordTypeId, UUID permissionSetId);
 }
+
