@@ -190,7 +190,8 @@ V1__initial_metadata_schema.sql
 V2__seed_standard_objects.sql
 V3__permission_schema.sql
 V4__automation_audit_schema.sql
-V5__add_webhook_subscriptions.sql   ← next available version
+V5__extended_metadata_and_script_schema.sql
+V6__add_webhook_subscriptions.sql   ← next available version
 ```
 
 ### Rules
@@ -205,7 +206,7 @@ V5__add_webhook_subscriptions.sql   ← next available version
 ### Template for a new table migration
 
 ```sql
--- V5__add_webhook_subscriptions.sql
+-- V6__add_webhook_subscriptions.sql
 
 CREATE TABLE webhook_subscription (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
