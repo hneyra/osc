@@ -7,7 +7,7 @@ This document is for AI coding agents (Claude Code). Human developer guide is in
 Before writing any code:
 1. Read `docs/PROJECT.md` — architecture, phases, decisions, glossary.
 2. Read `docs/ARCHITECTURE.md` — technical details, reactive patterns, examples.
-3. Read relevant ADRs in `docs/adr/` — especially ADR-001, ADR-002, ADR-003.
+3. Read relevant ADRs in `docs/adr/` — especially ADR-001, ADR-002, ADR-003, and ADR-005/ADR-006 if the task touches user-code/scripting or the extended (Record Type, relationship, Formula/Rollup) metadata model.
 4. Read the relevant contract in `docs/contracts/` for the current phase.
 5. Identify **which phase** we're implementing. Do not build on abstractions that don't exist yet.
 6. Confirm the task scope before generating code. Output implementation + tests.

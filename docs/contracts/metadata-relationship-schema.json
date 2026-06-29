@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osc.dev/schemas/metadata-relationship",
+  "title": "RelationshipDefinition",
+  "description": "Schema for a relationship between two objects (ADR-006). Lookup and Master-Detail point at a field on the child object; Many-to-Many points at an auto-created junction object.",
+  "type": "object",
+  "required": ["relationshipType", "childObjectApiName", "parentObjectApiName"],
+  "additionalProperties": false,
+  "properties": {
+    "id":        { "type": "string", "format": "uuid" },
+    "tenantId":  { "type": "string", "format": "uuid" },
+    "relationshipType": {
+      "type": "string",
+      "enum": ["LOOKUP", "MASTER_DETAIL", "MANY_TO_MANY"]
+    },
+    "childObjectApiName":  { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(__c)?$" },
+    "parentObjectApiName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(__c)?$" },
+    "fieldApiName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(__c)?$",
+      "description": "The LOOKUP/MASTER_DETAIL field on the child object. Required unless relationshipType is MANY_TO_MANY."
+    },
+    "junctionObjectApiName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*(__c)?$",
+      "description": "Auto-created junction object api_name. Required when relationshipType is MANY_TO_MANY."
+    },
+    "onDelete": {
+      "type": "string",
+      "enum": ["CASCADE", "RESTRICT", "SET_NULL"],
+      "default": "RESTRICT",
+      "description": "MASTER_DETAIL is forced to CASCADE at the application layer regardless of this value."
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "relationshipType": { "const": "MANY_TO_MANY" } } },
+      "then": { "required": ["junctionObjectApiName"] },
+      "else": { "required": ["fieldApiName"] }
+    },
+    {
+      "if": { "properties": { "relationshipType": { "const": "MASTER_DETAIL" } } },
+      "then": { "properties": { "onDelete": { "const": "CASCADE" } } }
+    }
+  ]
+}

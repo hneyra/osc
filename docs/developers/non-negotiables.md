@@ -26,6 +26,8 @@ These constraints are **architectural laws**. They cannot be overridden by any t
 **Why:** Blocking inside a reactive pipeline stalls the event loop thread, causing cascading failures.  
 **Detect:** ArchUnit rule `NoBlockCallsRule` fails the build if a `.block()` call is found in `src/main`.
 
+**Scoped exception (ADR-005):** `backend/kotlin-scripting` may call `.block()`, but only inside classes scheduled on `Schedulers.boundedElastic()` (the `ExecutionContext`/`RecordOperations` facades exposed to Kotlin scripts). Kotlin script compilation and evaluation are inherently blocking JVM operations; isolating that behind the elastic scheduler with a hard timeout is the same pattern this rule already prescribes for "CPU-bound or legacy-blocking code." This exception is enforced and bounded by its own rule, `KotlinScriptingBlockingIsolationRule`, scoped to that module only — `NoBlockCallsRule` still applies unmodified to every other module.
+
 ---
 
 ## Multi-Tenancy
@@ -112,6 +114,35 @@ These constraints are **architectural laws**. They cannot be overridden by any t
 **Why:** Consistency, testability, and the project's chosen abstraction layer.
 
 ---
+
+## User Code & Scripting (ADR-005)
+
+### NNG-023 · A script cannot be activated with a failing compile
+**Rule:** `md_script.is_active` can only transition to `true` when `compile_errors` is empty. The compiler runs on save, not on execution.
+**Why:** Prevents a runtime compile failure from breaking a live trigger pipeline.
+**Verify:** DB `CHECK` constraint (`NOT is_active OR compile_errors = '[]'::jsonb`) plus `ScriptActivationServiceTest`.
+
+### NNG-024 · No elevated permissions for script execution
+**Rule:** Every Kotlin script executes with the invoking user's `SecurityContext`. FLS/RLS apply to every `RecordOperations` call exactly as they do on the REST API path.
+**Why:** A scripting engine that bypasses permission checks would defeat the entire security model (§ADR-001, §security-model.md).
+**Verify:** `ScriptPermissionEnforcementTest` — a script run as a low-privilege user cannot read/write fields that user lacks FLS access to.
+
+### NNG-025 · AI-generated scripts never auto-activate
+**Rule:** A script proposed by the AI layer is persisted with `is_active = false` and `generated_by_ai = true`. Only an explicit human action can set `is_active = true`.
+**Why:** Consistent with NNG-017 — AI output never mutates live behavior without human confirmation.
+**Verify:** `AiScriptProposalServiceTest`.
+
+## Extended Metadata (ADR-006)
+
+### NNG-026 · Master-Detail cascade delete is transactional, not a DB-level FK
+**Rule:** Because all records share the universal `record` table, Master-Detail cascade delete is enforced in `DynamicPersistenceService` inside the same R2DBC transaction as the parent delete — there is no physical per-object foreign key to attach `ON DELETE CASCADE` to.
+**Why:** Preserves ADR-002's "everything lives in `record`" model while still guaranteeing cascade integrity.
+**Verify:** `MasterDetailCascadeIntegrationTest`.
+
+### NNG-027 · Rollup fields are never computed synchronously
+**Rule:** `ROLLUP` field recomputation happens only via the outbox/AFTER pipeline, triggered by a child-record write. It must never block or extend the latency of the child record's own transaction.
+**Why:** Avoids fan-out latency on every child write; rollups are explicitly eventually-consistent, documented as such in the public API contract.
+**Verify:** `RollupRecalculationIntegrationTest` asserts the child write's response time is unaffected by rollup recomputation.
 
 ## Build & Infrastructure
 

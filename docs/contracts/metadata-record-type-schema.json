@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osc.dev/schemas/metadata-record-type",
+  "title": "RecordTypeDefinition",
+  "description": "Schema for a Record Type and its Page Layout assignment (ADR-006). A NULL recordTypeId on a record means the object's single default record type.",
+  "type": "object",
+  "required": ["objectApiName", "apiName", "label"],
+  "additionalProperties": false,
+  "properties": {
+    "id":             { "type": "string", "format": "uuid" },
+    "tenantId":       { "type": "string", "format": "uuid" },
+    "objectApiName":  { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*(__c)?$" },
+    "apiName": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "description": "Immutable API name for the record type."
+    },
+    "label":      { "type": "string", "minLength": 1, "maxLength": 80 },
+    "isDefault":  { "type": "boolean", "default": false },
+    "isActive":   { "type": "boolean", "default": true },
+    "createdAt":  { "type": "string", "format": "date-time" }
+  }
+}

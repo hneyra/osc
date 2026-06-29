@@ -71,12 +71,14 @@ osc/
 │   ├── query-engine/            # SOQL-like → parameterized SQL
 │   ├── automation/              # Validation rules, flows, user-code
 │   ├── security/                # Tenant, permissions, RLS glue
+│   ├── kotlin-scripting/        # Kotlin Scripting compiler, sandbox, execution (ADR-005)
 │   ├── api/                     # Dynamic REST API
-│   ├── ai/                      # Spring AI: NL→metadata, NL→query
+│   ├── ai/                      # Spring AI: NL→metadata, NL→query, NL→script proposal
 │   └── integrations/            # Webhooks, outbox, outbound clients
 ├── frontend/
 │   ├── design-system/           # Base components (~30)
 │   ├── renderer/                # LayoutRenderer, FieldRenderer, ListViewRenderer
+│   ├── script-editor/           # Kotlin script editor UI (ADR-005)
 │   ├── admin/                   # Configuration UI
 │   └── runtime/                 # App consuming metadata + data
 └── infrastructure/              # Pulumi TypeScript
@@ -179,9 +181,15 @@ Owns: `RecordController`, `MetadataController`, dynamic routing.
 Owns: `ExpressionEvaluator`, `AutomationRunner`, `UserCodeExecutor` port.
 - No direct DB access — communicates via other modules.
 
+### `kotlin-scripting`
+
+Owns: `KotlinScriptCompilerService`, `CompiledScriptCache`, `ScriptSandbox`, `ExecutionContext`/`RecordOperations`.
+- Compiles on save, caches the compiled script, executes it inside a restricted classloader with a runtime guard.
+- The **only** module allowed to call `.block()`, and only inside classes scheduled on `Schedulers.boundedElastic()`. See ADR-005 and `docs/developers/non-negotiables.md` NNG-004.
+
 ### `ai`
 
-Owns: `NLToMetadataService`, `NLToQueryService`.
+Owns: `NLToMetadataService`, `NLToQueryService`, `NLToScriptService` (proposes Kotlin script source, compile-checked only — never executed).
 - All output validated before applying to the system.
 
 ### `integrations`
@@ -270,3 +278,9 @@ A: Typed configuration, IDE autocompletion, better composability for a multi-mod
 
 **Q: Can I add a new dependency?**
 A: For production dependencies, open a discussion first. For test dependencies, add to the relevant module's `build.gradle.kts`.
+
+**Q: Why does `kotlin-scripting` get to call `.block()` when nothing else can?**
+A: Kotlin script compilation/execution are inherently blocking JVM operations (same category as any CPU-bound or legacy-blocking work). Isolating that behind `Schedulers.boundedElastic()` with a hard timeout is the same pattern NNG-004 already prescribes elsewhere — it's just given its own ArchUnit rule (`KotlinScriptingBlockingIsolationRule`) scoped to that module instead of a case-by-case exception. See ADR-005.
+
+**Q: I want to build a new standard module (e.g., Invoicing, Inventory). Where do I start?**
+A: See `docs/developers/new-module-guide.md` — it walks through defining the object/field metadata, adding relationships and record types, wiring layouts, and where Kotlin Scripting triggers fit in, without writing any bespoke Java/Kotlin business-object code.

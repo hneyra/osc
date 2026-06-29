@@ -24,7 +24,7 @@
         "PICKLIST", "MULTIPICKLIST",
         "LOOKUP", "MASTER_DETAIL",
         "EMAIL", "URL", "PHONE",
-        "AUTO_NUMBER", "FORMULA"
+        "AUTO_NUMBER", "FORMULA", "ROLLUP"
       ]
     },
     "storage_kind": { "type": "string", "enum": ["COLUMN", "JSONB"] },
@@ -48,7 +48,18 @@
           }
         },
         "referenceTo":  { "type": "string", "description": "Target object api_name for LOOKUP/MASTER_DETAIL." },
-        "formula":      { "type": "string", "description": "Formula expression for FORMULA fields." },
+        "formula":      { "type": "string", "description": "Formula expression for FORMULA fields. Same whitelist DSL as Validation Rules. Same-object field references only (ADR-006)." },
+        "rollup": {
+          "type": "object",
+          "description": "Aggregation config for ROLLUP fields (ADR-006). Recomputed asynchronously via the outbox/AFTER pipeline, never synchronously.",
+          "required": ["relationshipId", "aggregate"],
+          "properties": {
+            "relationshipId":      { "type": "string", "format": "uuid", "description": "md_relationship.id of the child relationship to aggregate over." },
+            "aggregate":           { "type": "string", "enum": ["SUM", "COUNT", "MIN", "MAX", "AVG"] },
+            "sourceFieldApiName":  { "type": "string", "description": "Child field to aggregate. Omitted for COUNT." },
+            "filterExpression":    { "type": "string", "description": "Optional DSL filter, same grammar as Validation Rules." }
+          }
+        },
         "precision":    { "type": "integer", "minimum": 0 },
         "scale":        { "type": "integer", "minimum": 0 }
       }
@@ -56,11 +67,27 @@
     "created_at":   { "type": "string", "format": "date-time" },
     "updated_at":   { "type": "string", "format": "date-time" }
   },
-  "if": { "properties": { "field_type": { "enum": ["PICKLIST", "MULTIPICKLIST"] } } },
-  "then": {
-    "required": ["config"],
-    "properties": {
-      "config": { "required": ["picklistValues"] }
+  "allOf": [
+    {
+      "if": { "properties": { "field_type": { "enum": ["PICKLIST", "MULTIPICKLIST"] } } },
+      "then": {
+        "required": ["config"],
+        "properties": { "config": { "required": ["picklistValues"] } }
+      }
+    },
+    {
+      "if": { "properties": { "field_type": { "const": "FORMULA" } } },
+      "then": {
+        "required": ["config"],
+        "properties": { "config": { "required": ["formula"] } }
+      }
+    },
+    {
+      "if": { "properties": { "field_type": { "const": "ROLLUP" } } },
+      "then": {
+        "required": ["config"],
+        "properties": { "config": { "required": ["rollup"] } }
+      }
     }
-  }
+  ]
 }

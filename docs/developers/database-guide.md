@@ -11,11 +11,21 @@ OSC uses **PostgreSQL 16** as its sole datastore. All access is through **R2DBC*
 ```sql
 tenant                -- registered tenants
 md_object             -- object type definitions (per tenant)
-md_field              -- field definitions (per object, per tenant)
+md_field              -- field definitions (per object, per tenant) — now incl. FORMULA, ROLLUP (ADR-006)
 md_validation_rule    -- declarative validation formulas
 md_layout             -- form/detail layout sections
+md_layout_assignment  -- which layout applies for a given record type + permission set (ADR-006)
 md_list_view          -- list view column definitions
 md_automation         -- trigger/action automation definitions
+md_relationship        -- Lookup / Master-Detail / Many-to-Many between objects (ADR-006)
+md_record_type         -- record types per object (ADR-006)
+md_script               -- Kotlin Scripting user-code: Trigger/Batch/Scheduled/Invocable Action (ADR-005)
+```
+
+### Script Execution Audit (ADR-005)
+
+```sql
+script_execution_log  -- every Kotlin script execution: script_id, trigger context, duration, outcome, log output
 ```
 
 ### Data Tables (Data Plane)
@@ -91,6 +101,83 @@ When a field's access frequency crosses a threshold (`FieldAccessCounter`), it c
 | `COLUMN` | Stored in a promoted native column |
 
 Promotion requires a Flyway migration. The Query Engine generates different SQL paths depending on `storage_kind`.
+
+## Extended Metadata (ADR-006) and Script Tables (ADR-005)
+
+Additive — no existing table changes destructively. Full rationale in ADR-006 and ADR-005.
+
+```sql
+ALTER TABLE record ADD COLUMN record_type_id UUID REFERENCES md_record_type(id);
+-- NULL = object's single default record type; existing objects are unaffected.
+
+CREATE TABLE md_relationship (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id          UUID NOT NULL REFERENCES tenant(id),
+  relationship_type  TEXT NOT NULL,           -- 'LOOKUP' | 'MASTER_DETAIL' | 'MANY_TO_MANY'
+  child_object_id    UUID NOT NULL REFERENCES md_object(id),
+  parent_object_id   UUID NOT NULL REFERENCES md_object(id),
+  field_id           UUID REFERENCES md_field(id),
+  junction_object_id UUID REFERENCES md_object(id),
+  on_delete          TEXT NOT NULL DEFAULT 'RESTRICT',
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE md_record_type (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   UUID NOT NULL REFERENCES tenant(id),
+  object_id   UUID NOT NULL REFERENCES md_object(id),
+  api_name    TEXT NOT NULL,
+  label       TEXT NOT NULL,
+  is_default  BOOLEAN NOT NULL DEFAULT false,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, object_id, api_name)
+);
+
+CREATE TABLE md_layout_assignment (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id         UUID NOT NULL REFERENCES tenant(id),
+  layout_id         UUID NOT NULL REFERENCES md_layout(id),
+  record_type_id    UUID REFERENCES md_record_type(id),
+  permission_set_id UUID REFERENCES permission_set(id),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, record_type_id, permission_set_id)
+);
+
+CREATE TABLE md_script (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id        UUID NOT NULL REFERENCES tenant(id),
+  object_id        UUID NOT NULL REFERENCES md_object(id),
+  kind             TEXT NOT NULL,    -- 'TRIGGER' | 'BATCH' | 'SCHEDULED' | 'INVOCABLE_ACTION'
+  trigger_event    TEXT,             -- required when kind = 'TRIGGER'
+  invocable_name   TEXT,             -- required when kind = 'INVOCABLE_ACTION'
+  schedule_cron    TEXT,             -- required when kind = 'SCHEDULED'
+  source           TEXT NOT NULL,
+  is_active        BOOLEAN NOT NULL DEFAULT false,
+  compiled_at      TIMESTAMPTZ,
+  compile_errors   JSONB NOT NULL DEFAULT '[]',
+  timeout_seconds  INT NOT NULL DEFAULT 5,
+  generated_by_ai  BOOLEAN NOT NULL DEFAULT false,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (NOT is_active OR compile_errors = '[]'::jsonb)
+);
+
+CREATE TABLE script_execution_log (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id        UUID NOT NULL REFERENCES tenant(id),
+  script_id        UUID NOT NULL REFERENCES md_script(id),
+  trigger_context  TEXT,
+  duration_ms      INT NOT NULL,
+  outcome          TEXT NOT NULL,    -- 'SUCCESS' | 'FAILED' | 'TIMEOUT'
+  log_output       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- All six tables: tenant_id NOT NULL, RLS enabled, tenant_isolation policy (NNG-005/006/008), same pattern as `record` above.
+```
+
+`FORMULA` and `ROLLUP` are `md_field.field_type` values, not new tables — see `docs/contracts/metadata-field-schema.json` for the `config` shape (`config.formula` / `config.rollup`).
 
 ## Flyway Conventions
 

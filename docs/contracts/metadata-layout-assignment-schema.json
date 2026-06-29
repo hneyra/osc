@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://osc.dev/schemas/metadata-layout-assignment",
+  "title": "LayoutAssignmentDefinition",
+  "description": "Maps a Page Layout (md_layout) to a Record Type and/or Permission Set (ADR-006). Resolution order at render time, most specific wins: (recordTypeId, permissionSetId) > (recordTypeId, null) > (null, permissionSetId) > (null, null) object default.",
+  "type": "object",
+  "required": ["layoutId"],
+  "additionalProperties": false,
+  "properties": {
+    "id":               { "type": "string", "format": "uuid" },
+    "tenantId":         { "type": "string", "format": "uuid" },
+    "layoutId":         { "type": "string", "format": "uuid" },
+    "recordTypeId":     { "type": ["string", "null"], "format": "uuid", "description": "NULL applies to all record types." },
+    "permissionSetId":  { "type": ["string", "null"], "format": "uuid", "description": "NULL applies to all profiles." },
+    "createdAt":        { "type": "string", "format": "date-time" }
+  }
+}
