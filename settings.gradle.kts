@@ -28,5 +28,6 @@ include(
     "backend:security",
     "backend:api",
     "backend:ai",
-    "backend:integrations"
+    "backend:integrations",
+    "backend:kotlin-scripting"
 )
