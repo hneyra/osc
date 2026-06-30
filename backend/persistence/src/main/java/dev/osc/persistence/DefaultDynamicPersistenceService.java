@@ -122,7 +122,7 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                                 }
                                                 return recordRepository.findByObjectId(obj.id(), page)
                                                         .map(record -> enrichRecord(record, fields, formulaFields));
-                                            })
+                                              })
                                             .onErrorResume(ex -> recordRepository.findByObjectId(obj.id(), page));
                                 })
                 );
@@ -145,9 +145,30 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
     public Mono<Void> deleteRecord(UUID id) {
         return recordRepository.findById(id)
                 .flatMap(oldRecord ->
-                        recordRepository.delete(id)
+                        cascadeDeleteChildren(oldRecord)
+                                .then(recordRepository.delete(id))
                                 .then(triggerRollupRecompute(oldRecord, null))
                 );
+    }
+
+    private Mono<Void> cascadeDeleteChildren(RecordEntity parentRecord) {
+        return resolveTenantId()
+                .flatMapMany(tenantId ->
+                        metadataEngine.getRelationships(tenantId, parentRecord.objectId())
+                                .filter(rel -> "MASTER_DETAIL".equals(rel.relationshipType())
+                                        && rel.parentObjectId().equals(parentRecord.objectId()))
+                                .flatMap(rel ->
+                                        metadataEngine.findFields(tenantId, rel.childObjectId())
+                                                .filter(f -> f.id().equals(rel.fieldId()))
+                                                .next()
+                                                .flatMapMany(field -> {
+                                                    String key = field.storageKey() != null ? field.storageKey() : field.apiName();
+                                                    return recordRepository.findByField(rel.childObjectId(), key, parentRecord.id());
+                                                })
+                                )
+                )
+                .flatMap(childRecord -> deleteRecord(childRecord.id()))
+                .then();
     }
 
     private Mono<Void> triggerRollupRecompute(RecordEntity childRecord, RecordEntity oldChildRecord) {
