@@ -154,17 +154,17 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                         return recordRepository.findByObjectId(obj.id(), page);
                                     }
                                     return fieldsFlux.collectList()
-                                             .flatMapMany(fields -> {
-                                                 List<FieldDefinition> formulaFields = fields.stream()
-                                                         .filter(f -> f.fieldType() == FieldType.FORMULA)
-                                                         .toList();
-                                                 if (formulaFields.isEmpty()) {
-                                                     return recordRepository.findByObjectId(obj.id(), page);
-                                                 }
-                                                 return recordRepository.findByObjectId(obj.id(), page)
-                                                         .map(record -> enrichRecord(record, fields, formulaFields));
-                                             })
-                                             .onErrorResume(ex -> recordRepository.findByObjectId(obj.id(), page));
+                                            .flatMapMany(fields -> {
+                                                List<FieldDefinition> formulaFields = fields.stream()
+                                                        .filter(f -> f.fieldType() == FieldType.FORMULA)
+                                                        .toList();
+                                                if (formulaFields.isEmpty()) {
+                                                    return recordRepository.findByObjectId(obj.id(), page);
+                                                }
+                                                return recordRepository.findByObjectId(obj.id(), page)
+                                                        .map(record -> enrichRecord(record, fields, formulaFields));
+                                            })
+                                            .onErrorResume(ex -> recordRepository.findByObjectId(obj.id(), page));
                                 })
                 );
     }
@@ -246,7 +246,8 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                                     : Mono.just(oldRecordApiNamed);
                                                     
                                             return beforeTriggerMono.flatMap(beforeData ->
-                                                recordRepository.delete(id)
+                                                cascadeDeleteChildren(oldRecord)
+                                                        .then(recordRepository.delete(id))
                                                         .then(Mono.defer(() -> {
                                                             Mono<Void> afterTriggerMono = (automationEngine != null)
                                                                     ? automationEngine.fire(tenantId, oldRecord.objectId(), TriggerType.AFTER_DELETE, oldRecordApiNamed)
@@ -258,6 +259,26 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                         })
                         )
                 );
+    }
+
+    private Mono<Void> cascadeDeleteChildren(RecordEntity parentRecord) {
+        return resolveTenantId()
+                .flatMapMany(tenantId ->
+                        metadataEngine.getRelationships(tenantId, parentRecord.objectId())
+                                .filter(rel -> "MASTER_DETAIL".equals(rel.relationshipType())
+                                        && rel.parentObjectId().equals(parentRecord.objectId()))
+                                .flatMap(rel ->
+                                        metadataEngine.findFields(tenantId, rel.childObjectId())
+                                                .filter(f -> f.id().equals(rel.fieldId()))
+                                                .next()
+                                                .flatMapMany(field -> {
+                                                    String key = field.storageKey() != null ? field.storageKey() : field.apiName();
+                                                    return recordRepository.findByField(rel.childObjectId(), key, parentRecord.id());
+                                                })
+                                )
+                )
+                .flatMap(childRecord -> deleteRecord(childRecord.id()))
+                .then();
     }
 
     private Mono<Void> triggerRollupRecompute(RecordEntity childRecord, RecordEntity oldChildRecord) {

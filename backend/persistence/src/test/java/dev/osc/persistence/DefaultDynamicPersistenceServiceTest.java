@@ -36,6 +36,7 @@ class DefaultDynamicPersistenceServiceTest {
     @BeforeEach
     void setUp() {
         service = new DefaultDynamicPersistenceService(metadataEngine, coercionEngine, recordRepository);
+        lenient().when(metadataEngine.getRelationships(any(), any())).thenReturn(Flux.empty());
     }
 
     // ── createRecord ─────────────────────────────────────────────────────────

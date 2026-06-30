@@ -21,6 +21,7 @@ public record RelationshipDefinition(
         UUID fieldId,
         UUID junctionObjectId,
         String onDelete,
+        String junctionObjectApiName,
         Instant createdAt
 ) {
     public RelationshipDefinition {
@@ -33,5 +34,9 @@ public record RelationshipDefinition(
                 && !relationshipType.equals("MASTER_DETAIL")
                 && !relationshipType.equals("MANY_TO_MANY"))
             throw new IllegalArgumentException("relationshipType must be LOOKUP, MASTER_DETAIL, or MANY_TO_MANY");
+    }
+
+    public RelationshipDefinition(UUID id, UUID tenantId, UUID childObjectId, UUID parentObjectId, String relationshipType, UUID fieldId, UUID junctionObjectId, String onDelete, Instant createdAt) {
+        this(id, tenantId, childObjectId, parentObjectId, relationshipType, fieldId, junctionObjectId, onDelete, null, createdAt);
     }
 }

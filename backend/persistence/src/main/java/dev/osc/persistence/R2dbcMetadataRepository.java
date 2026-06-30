@@ -35,7 +35,7 @@ public class R2dbcMetadataRepository implements MetadataRepository {
         return activateTenant(tenantId)
                 .then(client.sql("""
                         SELECT id, tenant_id, api_name, label, label_plural,
-                               is_custom, created_at, updated_at
+                               is_custom, config::text, created_at, updated_at
                         FROM md_object
                         WHERE tenant_id = :tenantId AND api_name = :apiName
                         """)
@@ -71,7 +71,8 @@ public class R2dbcMetadataRepository implements MetadataRepository {
                 .thenMany(client.sql("""
                         SELECT id, tenant_id, relationship_type,
                                child_object_id, parent_object_id,
-                               field_id, junction_object_id, on_delete, created_at
+                               field_id, junction_object_id, on_delete,
+                               junction_object_api_name, created_at
                         FROM md_relationship
                         WHERE tenant_id = :tenantId
                           AND (child_object_id = :objectId OR parent_object_id = :objectId)
@@ -134,6 +135,7 @@ public class R2dbcMetadataRepository implements MetadataRepository {
                 row.get("label", String.class),
                 row.get("label_plural", String.class),
                 Boolean.TRUE.equals(row.get("is_custom", Boolean.class)),
+                row.get("config", String.class) != null ? row.get("config", String.class) : "{}",
                 row.get("created_at", Instant.class),
                 row.get("updated_at", Instant.class)
         );
@@ -167,6 +169,7 @@ public class R2dbcMetadataRepository implements MetadataRepository {
                 row.get("field_id", UUID.class),
                 row.get("junction_object_id", UUID.class),
                 row.get("on_delete", String.class),
+                row.get("junction_object_api_name", String.class),
                 row.get("created_at", Instant.class)
         );
     }
