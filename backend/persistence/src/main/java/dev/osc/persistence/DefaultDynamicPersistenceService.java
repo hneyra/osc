@@ -3,6 +3,8 @@ package dev.osc.persistence;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.osc.automation.dsl.FormulaEvaluator;
 import dev.osc.automation.dsl.FormulaParser;
+import dev.osc.automation.engine.AutomationEngine;
+import dev.osc.automation.engine.TriggerType;
 import dev.osc.automation.outbox.OutboxEvent;
 import dev.osc.automation.outbox.OutboxEventStatus;
 import dev.osc.automation.outbox.OutboxRepository;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +36,7 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
     private final FieldCoercionEngine coercionEngine;
     private final RecordRepository recordRepository;
     private final OutboxRepository outboxRepository;
+    private final AutomationEngine automationEngine;
     private final ObjectMapper objectMapper;
     private final FormulaParser formulaParser;
     private final FormulaEvaluator formulaEvaluator;
@@ -40,20 +44,45 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
     public DefaultDynamicPersistenceService(MetadataEngine metadataEngine,
                                              FieldCoercionEngine coercionEngine,
                                              RecordRepository recordRepository) {
-        this(metadataEngine, coercionEngine, recordRepository, null);
+        this(metadataEngine, coercionEngine, recordRepository, null, null);
     }
 
     public DefaultDynamicPersistenceService(MetadataEngine metadataEngine,
                                              FieldCoercionEngine coercionEngine,
                                              RecordRepository recordRepository,
                                              OutboxRepository outboxRepository) {
+        this(metadataEngine, coercionEngine, recordRepository, outboxRepository, null);
+    }
+
+    public DefaultDynamicPersistenceService(MetadataEngine metadataEngine,
+                                             FieldCoercionEngine coercionEngine,
+                                             RecordRepository recordRepository,
+                                             OutboxRepository outboxRepository,
+                                             AutomationEngine automationEngine) {
         this.metadataEngine = metadataEngine;
         this.coercionEngine = coercionEngine;
         this.recordRepository = recordRepository;
         this.outboxRepository = outboxRepository;
+        this.automationEngine = automationEngine;
         this.objectMapper = new ObjectMapper();
         this.formulaParser = new FormulaParser();
         this.formulaEvaluator = new FormulaEvaluator();
+    }
+
+    private Map<String, Object> recordToApiNamedMap(RecordEntity record, List<FieldDefinition> fields) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", record.id().toString());
+        map.put("objectId", record.objectId().toString());
+        if (record.name() != null) map.put("name", record.name());
+        if (record.ownerId() != null) map.put("ownerId", record.ownerId().toString());
+        
+        for (FieldDefinition field : fields) {
+            String key = field.storageKey() != null ? field.storageKey() : field.apiName();
+            if (record.data().containsKey(key)) {
+                map.put(field.apiName(), record.data().get(key));
+            }
+        }
+        return map;
     }
 
     @Override
@@ -65,29 +94,41 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                 .flatMap(obj ->
                                         metadataEngine.findFields(tenantId, obj.id()).collectList()
                                                 .flatMap(fields -> {
-                                                    Map<String, Object> coercedData = new LinkedHashMap<>();
-                                                    for (FieldDefinition field : fields) {
-                                                        Object value = data.get(field.apiName());
-                                                        // Always coerce: the engine validates required (null -> Failure)
-                                                        // and type, so required-field enforcement is not bypassed.
-                                                        CoercionResult result = coercionEngine.coerce(field, value);
-                                                        if (result instanceof CoercionResult.Failure f) {
-                                                            return Mono.error(
-                                                                    new FieldValidationException(field.apiName(), f.error())
-                                                            );
+                                                    Mono<Map<String, Object>> beforeTriggerMono = (automationEngine != null)
+                                                            ? automationEngine.fireBeforeWithContext(tenantId, obj.id(), TriggerType.BEFORE_INSERT, data)
+                                                            : Mono.just(data);
+                                                            
+                                                    return beforeTriggerMono.flatMap(beforeData -> {
+                                                        Map<String, Object> coercedData = new LinkedHashMap<>();
+                                                        for (FieldDefinition field : fields) {
+                                                            Object value = beforeData.get(field.apiName());
+                                                            // Always coerce: the engine validates required (null -> Failure)
+                                                            // and type, so required-field enforcement is not bypassed.
+                                                            CoercionResult result = coercionEngine.coerce(field, value);
+                                                            if (result instanceof CoercionResult.Failure f) {
+                                                                return Mono.error(
+                                                                        new FieldValidationException(field.apiName(), f.error())
+                                                                );
+                                                            }
+                                                            Object typedValue = ((CoercionResult.Success) result).typedValue();
+                                                            if (typedValue == null) continue; // optional field, no value supplied
+                                                            String key = field.storageKey() != null
+                                                                    ? field.storageKey() : field.apiName();
+                                                            coercedData.put(key, typedValue);
                                                         }
-                                                        Object typedValue = ((CoercionResult.Success) result).typedValue();
-                                                        if (typedValue == null) continue; // optional field, no value supplied
-                                                        String key = field.storageKey() != null
-                                                                ? field.storageKey() : field.apiName();
-                                                        coercedData.put(key, typedValue);
-                                                    }
-                                                    return recordRepository.insert(
-                                                            new RecordInsertCommand(obj.id(), null, null, coercedData)
-                                                    ).flatMap(insertedRecord ->
-                                                            triggerRollupRecompute(insertedRecord, null)
-                                                                    .thenReturn(insertedRecord)
-                                                    );
+                                                        return recordRepository.insert(
+                                                                new RecordInsertCommand(obj.id(), null, null, coercedData)
+                                                        ).flatMap(insertedRecord -> {
+                                                            Map<String, Object> recordMap = recordToApiNamedMap(insertedRecord, fields);
+                                                            Mono<Void> afterTriggerMono = (automationEngine != null)
+                                                                    ? automationEngine.fire(tenantId, obj.id(), TriggerType.AFTER_INSERT, recordMap)
+                                                                    : Mono.empty();
+                                                                    
+                                                            return afterTriggerMono
+                                                                    .then(triggerRollupRecompute(insertedRecord, null))
+                                                                    .thenReturn(insertedRecord);
+                                                        });
+                                                    });
                                                 })
                                 )
                 );
@@ -122,7 +163,7 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                                 }
                                                 return recordRepository.findByObjectId(obj.id(), page)
                                                         .map(record -> enrichRecord(record, fields, formulaFields));
-                                              })
+                                            })
                                             .onErrorResume(ex -> recordRepository.findByObjectId(obj.id(), page));
                                 })
                 );
@@ -132,22 +173,91 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
     public Mono<RecordEntity> updateRecord(UUID id, Map<String, Object> dataPatch) {
         return recordRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ObjectNotFoundException("Record not found")))
-                .flatMap(oldRecord ->
-                        recordRepository.update(new RecordUpdateCommand(id, null, null, dataPatch))
-                                .flatMap(updatedRecord ->
-                                        triggerRollupRecompute(updatedRecord, oldRecord)
-                                                .thenReturn(updatedRecord)
-                                )
+                .flatMap(oldRecord -> resolveTenantId()
+                        .flatMap(tenantId ->
+                                metadataEngine.findFields(tenantId, oldRecord.objectId()).collectList()
+                                        .flatMap(fields -> {
+                                            Map<String, Object> oldRecordApiNamed = recordToApiNamedMap(oldRecord, fields);
+                                            Map<String, Object> recordBeforeUpdate = new LinkedHashMap<>(oldRecordApiNamed);
+                                            recordBeforeUpdate.putAll(dataPatch);
+                                            
+                                            Mono<Map<String, Object>> beforeTriggerMono = (automationEngine != null)
+                                                    ? automationEngine.fireBeforeWithContext(tenantId, oldRecord.objectId(), TriggerType.BEFORE_UPDATE, recordBeforeUpdate)
+                                                    : Mono.just(recordBeforeUpdate);
+                                                    
+                                            return beforeTriggerMono.flatMap(beforeData -> {
+                                                Map<String, Object> finalPatch = new LinkedHashMap<>();
+                                                for (FieldDefinition field : fields) {
+                                                    if (beforeData.containsKey(field.apiName())) {
+                                                        Object originalVal = oldRecordApiNamed.get(field.apiName());
+                                                        Object newVal = beforeData.get(field.apiName());
+                                                        if (!Objects.equals(originalVal, newVal)) {
+                                                            CoercionResult result = coercionEngine.coerce(field, newVal);
+                                                            if (result instanceof CoercionResult.Failure f) {
+                                                                return Mono.error(
+                                                                        new FieldValidationException(field.apiName(), f.error())
+                                                                );
+                                                            }
+                                                            Object typedValue = ((CoercionResult.Success) result).typedValue();
+                                                            String key = field.storageKey() != null
+                                                                    ? field.storageKey() : field.apiName();
+                                                            finalPatch.put(key, typedValue);
+                                                        }
+                                                    }
+                                                }
+                                                for (Map.Entry<String, Object> entry : dataPatch.entrySet()) {
+                                                    if (!finalPatch.containsKey(entry.getKey())) {
+                                                        boolean isMetadataField = fields.stream().anyMatch(f -> f.apiName().equals(entry.getKey()));
+                                                        if (!isMetadataField) {
+                                                            finalPatch.put(entry.getKey(), entry.getValue());
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                return recordRepository.update(new RecordUpdateCommand(id, null, null, finalPatch))
+                                                        .flatMap(updatedRecord -> {
+                                                            Map<String, Object> updatedRecordApiNamed = recordToApiNamedMap(updatedRecord, fields);
+                                                            Mono<Void> afterTriggerMono = (automationEngine != null)
+                                                                    ? automationEngine.fire(tenantId, oldRecord.objectId(), TriggerType.AFTER_UPDATE, updatedRecordApiNamed)
+                                                                    : Mono.empty();
+                                                                    
+                                                            return afterTriggerMono
+                                                                    .then(triggerRollupRecompute(updatedRecord, oldRecord))
+                                                                    .thenReturn(updatedRecord);
+                                                        });
+                                            });
+                                        })
+                        )
                 );
     }
 
     @Override
     public Mono<Void> deleteRecord(UUID id) {
         return recordRepository.findById(id)
-                .flatMap(oldRecord ->
-                        cascadeDeleteChildren(oldRecord)
-                                .then(recordRepository.delete(id))
-                                .then(triggerRollupRecompute(oldRecord, null))
+                .switchIfEmpty(Mono.error(new ObjectNotFoundException("Record not found")))
+                .flatMap(oldRecord -> resolveTenantId()
+                        .flatMap(tenantId ->
+                                metadataEngine.findFields(tenantId, oldRecord.objectId()).collectList()
+                                        .flatMap(fields -> {
+                                            Map<String, Object> oldRecordApiNamed = recordToApiNamedMap(oldRecord, fields);
+                                            
+                                            Mono<Map<String, Object>> beforeTriggerMono = (automationEngine != null)
+                                                    ? automationEngine.fireBeforeWithContext(tenantId, oldRecord.objectId(), TriggerType.BEFORE_DELETE, oldRecordApiNamed)
+                                                    : Mono.just(oldRecordApiNamed);
+                                                    
+                                            return beforeTriggerMono.flatMap(beforeData ->
+                                                cascadeDeleteChildren(oldRecord)
+                                                        .then(recordRepository.delete(id))
+                                                        .then(Mono.defer(() -> {
+                                                            Mono<Void> afterTriggerMono = (automationEngine != null)
+                                                                    ? automationEngine.fire(tenantId, oldRecord.objectId(), TriggerType.AFTER_DELETE, oldRecordApiNamed)
+                                                                    : Mono.empty();
+                                                            return afterTriggerMono
+                                                                    .then(triggerRollupRecompute(oldRecord, null));
+                                                        }))
+                                            );
+                                        })
+                        )
                 );
     }
 

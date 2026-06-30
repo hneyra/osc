@@ -5,6 +5,7 @@ plugins {
 
 
 dependencies {
+    implementation(project(":backend:automation"))
     implementation(project(":backend:metadata-engine"))
     implementation(project(":backend:persistence"))
     implementation(project(":backend:query-engine"))
