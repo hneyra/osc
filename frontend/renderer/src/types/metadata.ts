@@ -96,3 +96,24 @@ export interface ListView {
   name: string
   definition: ListViewDefinition
 }
+
+export interface RecordTypeDefinition {
+  id: string
+  tenantId: string
+  objectApiName: string
+  apiName: string
+  label: string
+  isDefault?: boolean
+  isActive: boolean
+  createdAt?: string
+}
+
+export interface LayoutAssignmentDefinition {
+  id: string
+  tenantId: string
+  layoutId: string
+  recordTypeId: string | null
+  permissionSetId: string | null
+  createdAt?: string
+}
+

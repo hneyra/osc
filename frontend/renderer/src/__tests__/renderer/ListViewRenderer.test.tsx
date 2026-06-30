@@ -122,4 +122,97 @@ describe('ListViewRenderer', () => {
     await userEvent.click(rows[0])
     expect(onRowClick).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1' }))
   })
+
+  it('translates record_type_id to a styled badge with the record type label', () => {
+    const rtPremium = {
+      id: 'rt-premium-id',
+      tenantId: 't1',
+      objectApiName: 'Account',
+      apiName: 'Premium',
+      label: 'Premium Account',
+      isDefault: false,
+      isActive: true,
+    }
+    const listViewWithRt: ListViewDefinition = {
+      columns: [
+        { fieldApiName: 'name', label: 'Name', sortable: true },
+        { fieldApiName: 'recordTypeId', label: 'Record Type', sortable: true },
+      ],
+      defaultSortField: 'name',
+      defaultSortOrder: 'ASC',
+      defaultLimit: 25,
+    }
+    const responseWithRt: RecordResponse = {
+      data: [
+        { id: 'r1', name: 'ACME', recordTypeId: 'rt-premium-id' },
+      ],
+      totalCount: 1, limit: 25, offset: 0, objectApiName: 'Account',
+    }
+
+    render(
+      <ListViewRenderer
+        listView={listViewWithRt}
+        fields={fields}
+        response={responseWithRt}
+        objectApiName="Account"
+        recordTypes={[rtPremium]}
+      />,
+      { wrapper: MemoryRouter }
+    )
+
+    // Should render the label "Premium Account" as a badge instead of raw UUID
+    expect(screen.getByTestId('record-type-badge-Premium')).toBeInTheDocument()
+    expect(screen.getByText('Premium Account')).toBeInTheDocument()
+    expect(screen.queryByText('rt-premium-id')).not.toBeInTheDocument()
+  })
+
+  it('resolves list columns dynamically from default layout assignment when columns are empty', () => {
+    const layoutDefault = {
+      sections: [
+        {
+          label: 'Default Layout',
+          columns: 1,
+          fields: [{ fieldApiName: 'name' }, { fieldApiName: 'industry__c' }],
+        },
+      ],
+    }
+    const layoutsMap = {
+      'layout-default-id': layoutDefault,
+    }
+    const assignments = [
+      {
+        id: 'la1',
+        tenantId: 't1',
+        layoutId: 'layout-default-id',
+        recordTypeId: null,
+        permissionSetId: null,
+      },
+    ]
+
+    // empty columns list view
+    const emptyColumnsListView: ListViewDefinition = {
+      columns: [],
+      defaultLimit: 25,
+    }
+
+    render(
+      <ListViewRenderer
+        listView={emptyColumnsListView}
+        fields={fields}
+        response={response}
+        objectApiName="Account"
+        layouts={layoutsMap}
+        layoutAssignments={assignments}
+      />,
+      { wrapper: MemoryRouter }
+    )
+
+    // Column headers should be resolved from the default layout (Name and Industry)
+    expect(screen.getByRole('columnheader', { name: 'Name' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Industry' })).toBeInTheDocument()
+    // It should also render cell values for those resolved columns
+    expect(screen.getByText('ACME')).toBeInTheDocument()
+    expect(screen.getByText('Tech')).toBeInTheDocument()
+  })
 })
+
