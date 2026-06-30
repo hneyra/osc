@@ -3,6 +3,9 @@ package dev.osc.persistence;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.osc.automation.dsl.FormulaEvaluator;
 import dev.osc.automation.dsl.FormulaParser;
+import dev.osc.automation.outbox.OutboxEvent;
+import dev.osc.automation.outbox.OutboxEventStatus;
+import dev.osc.automation.outbox.OutboxRepository;
 import dev.osc.metadata.*;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -12,6 +15,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -28,6 +32,7 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
     private final MetadataEngine metadataEngine;
     private final FieldCoercionEngine coercionEngine;
     private final RecordRepository recordRepository;
+    private final OutboxRepository outboxRepository;
     private final ObjectMapper objectMapper;
     private final FormulaParser formulaParser;
     private final FormulaEvaluator formulaEvaluator;
@@ -35,17 +40,18 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
     public DefaultDynamicPersistenceService(MetadataEngine metadataEngine,
                                              FieldCoercionEngine coercionEngine,
                                              RecordRepository recordRepository) {
-        this(metadataEngine, coercionEngine, recordRepository, new ObjectMapper());
+        this(metadataEngine, coercionEngine, recordRepository, null);
     }
 
     public DefaultDynamicPersistenceService(MetadataEngine metadataEngine,
                                              FieldCoercionEngine coercionEngine,
                                              RecordRepository recordRepository,
-                                             ObjectMapper objectMapper) {
+                                             OutboxRepository outboxRepository) {
         this.metadataEngine = metadataEngine;
         this.coercionEngine = coercionEngine;
         this.recordRepository = recordRepository;
-        this.objectMapper = objectMapper;
+        this.outboxRepository = outboxRepository;
+        this.objectMapper = new ObjectMapper();
         this.formulaParser = new FormulaParser();
         this.formulaEvaluator = new FormulaEvaluator();
     }
@@ -78,6 +84,9 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
                                                     }
                                                     return recordRepository.insert(
                                                             new RecordInsertCommand(obj.id(), null, null, coercedData)
+                                                    ).flatMap(insertedRecord ->
+                                                            triggerRollupRecompute(insertedRecord, null)
+                                                                    .thenReturn(insertedRecord)
                                                     );
                                                 })
                                 )
@@ -121,12 +130,85 @@ public class DefaultDynamicPersistenceService implements DynamicPersistenceServi
 
     @Override
     public Mono<RecordEntity> updateRecord(UUID id, Map<String, Object> dataPatch) {
-        return recordRepository.update(new RecordUpdateCommand(id, null, null, dataPatch));
+        return recordRepository.findById(id)
+                .switchIfEmpty(Mono.error(new ObjectNotFoundException("Record not found")))
+                .flatMap(oldRecord ->
+                        recordRepository.update(new RecordUpdateCommand(id, null, null, dataPatch))
+                                .flatMap(updatedRecord ->
+                                        triggerRollupRecompute(updatedRecord, oldRecord)
+                                                .thenReturn(updatedRecord)
+                                )
+                );
     }
 
     @Override
     public Mono<Void> deleteRecord(UUID id) {
-        return recordRepository.delete(id);
+        return recordRepository.findById(id)
+                .flatMap(oldRecord ->
+                        recordRepository.delete(id)
+                                .then(triggerRollupRecompute(oldRecord, null))
+                );
+    }
+
+    private Mono<Void> triggerRollupRecompute(RecordEntity childRecord, RecordEntity oldChildRecord) {
+        if (outboxRepository == null) {
+            return Mono.empty();
+        }
+        return resolveTenantId()
+                .flatMap(tenantId ->
+                        metadataEngine.getRelationships(tenantId, childRecord.objectId())
+                                .filter(rel -> "MASTER_DETAIL".equals(rel.relationshipType()))
+                                .flatMap(rel ->
+                                        metadataEngine.findFields(tenantId, childRecord.objectId())
+                                                .filter(f -> f.id().equals(rel.fieldId()))
+                                                .next()
+                                                .flatMap(field -> {
+                                                    String key = field.storageKey() != null ? field.storageKey() : field.apiName();
+
+                                                    Object currentParentIdObj = childRecord.data().get(key);
+                                                    Object oldParentIdObj = oldChildRecord != null ? oldChildRecord.data().get(key) : null;
+
+                                                    UUID currentParentId = parseUuid(currentParentIdObj);
+                                                    UUID oldParentId = parseUuid(oldParentIdObj);
+
+                                                    return Flux.just(currentParentId, oldParentId)
+                                                            .filter(Objects::nonNull)
+                                                            .distinct()
+                                                            .flatMap(parentId -> {
+                                                                OutboxEvent event = new OutboxEvent(
+                                                                        null,
+                                                                        tenantId,
+                                                                        "Record",
+                                                                        parentId,
+                                                                        "ROLLUP_RECOMPUTE",
+                                                                        Map.of(
+                                                                                "parentRecordId", parentId.toString(),
+                                                                                "relationshipId", rel.id().toString(),
+                                                                                "parentObjectId", rel.parentObjectId().toString()
+                                                                        ),
+                                                                        OutboxEventStatus.PENDING,
+                                                                        0,
+                                                                        null,
+                                                                        null
+                                                                );
+                                                                return outboxRepository.save(event);
+                                                            })
+                                                            .then();
+                                                })
+                                )
+                                .then()
+                )
+                .onErrorResume(ex -> Mono.empty()); // Never block the primary transaction
+    }
+
+    private UUID parseUuid(Object obj) {
+        if (obj == null) return null;
+        try {
+            if (obj instanceof UUID) return (UUID) obj;
+            return UUID.fromString(obj.toString());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private Mono<RecordEntity> enrichRecordWithFormulas(UUID tenantId, RecordEntity record) {
