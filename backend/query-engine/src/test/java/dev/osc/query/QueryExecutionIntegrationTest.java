@@ -181,6 +181,62 @@ class QueryExecutionIntegrationTest {
         assertThat(rows.get(0)).containsKey("name").doesNotContainKey("industry__c");
     }
 
+    @Test
+    @DisplayName("Formula evaluation computes values correctly at read-time and handles FLS gracefully")
+    void formulaEvaluationIntegration() {
+        // Insert amount__c (NUMBER) and tax__c (NUMBER)
+        client.sql("""
+                INSERT INTO md_field (id, tenant_id, object_id, api_name, label, field_type, storage_kind, storage_key, is_required, is_custom)
+                VALUES
+                    ('00000000-0000-0000-0002-000000000001', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0001-000000000001',
+                     'amount__c', 'Amount', 'NUMBER', 'JSONB', 'amount__c', FALSE, TRUE),
+                    ('00000000-0000-0000-0002-000000000002', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0001-000000000001',
+                     'tax_rate__c', 'Tax Rate', 'NUMBER', 'JSONB', 'tax_rate__c', FALSE, TRUE)
+                ON CONFLICT DO NOTHING
+                """).fetch().rowsUpdated().block();
+
+        // Insert total_tax__c (FORMULA): amount__c * tax_rate__c
+        client.sql("""
+                INSERT INTO md_field (id, tenant_id, object_id, api_name, label, field_type, storage_kind, storage_key, is_required, is_custom, config)
+                VALUES
+                    ('00000000-0000-0000-0002-000000000003', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0001-000000000001',
+                     'total_tax__c', 'Total Tax', 'FORMULA', 'JSONB', 'total_tax__c', FALSE, TRUE, CAST('{"formula":"amount__c * tax_rate__c"}' AS jsonb))
+                ON CONFLICT DO NOTHING
+                """).fetch().rowsUpdated().block();
+
+        // Let's insert a record with amount__c = 100 and tax_rate__c = 0.15
+        client.sql("""
+                INSERT INTO record (id, tenant_id, object_id, name, data)
+                VALUES
+                    ('00000000-0000-0000-0003-000000000001', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0001-000000000001',
+                     'Formula Account', CAST('{"amount__c":100, "tax_rate__c":0.15}' AS jsonb))
+                ON CONFLICT DO NOTHING
+                """).fetch().rowsUpdated().block();
+
+        // Query the formula field and the dependency fields
+        SelectQuery ast = parser.parse("SELECT name, amount__c, tax_rate__c, total_tax__c FROM Account WHERE name = 'Formula Account'");
+        TranslatedQuery tq = translator.translate(ast, SYSTEM_TENANT, java.util.Set.of()).block();
+        assertThat(tq).isNotNull();
+
+        List<Map<String, Object>> rows = executor.execute(tq).collectList().block();
+        assertThat(rows).hasSize(1);
+        Map<String, Object> row = rows.get(0);
+        assertThat(row.get("name")).isEqualTo("Formula Account");
+        assertThat(row.get("total_tax__c")).isEqualTo(15.0);
+
+        // FLS Protection Test: If 'amount__c' is NOT in allowedFields, 'total_tax__c' must evaluate gracefully
+        // because the parser/evaluator falls back to null -> 0.0 * 0.15 = 0.0
+        TranslatedQuery tqFls = translator.translate(ast, SYSTEM_TENANT, java.util.Set.of("name", "tax_rate__c", "total_tax__c")).block();
+        assertThat(tqFls).isNotNull();
+        assertThat(tqFls.sql()).doesNotContain("amount__c");
+
+        List<Map<String, Object>> rowsFls = executor.execute(tqFls).collectList().block();
+        assertThat(rowsFls).hasSize(1);
+        Map<String, Object> rowFls = rowsFls.get(0);
+        assertThat(rowFls).containsKey("total_tax__c");
+        assertThat(rowFls.get("total_tax__c")).isEqualTo(0.0);
+    }
+
     /** Minimal MetadataEngine delegating to the repository — no cache needed for this test. */
     private record DelegatingMetadataEngine(MetadataRepository repository) implements MetadataEngine {
         @Override

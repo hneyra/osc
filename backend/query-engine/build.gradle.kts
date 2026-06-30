@@ -5,6 +5,7 @@ plugins {
 dependencies {
     implementation(project(":backend:metadata-engine"))
     implementation(project(":backend:persistence"))
+    implementation(project(":backend:automation"))
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("org.postgresql:r2dbc-postgresql")
     runtimeOnly("org.postgresql:postgresql")

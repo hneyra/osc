@@ -70,6 +70,11 @@ public class DefaultQueryTranslator implements QueryTranslator {
                         .map(f -> fieldExpr(f) + " AS \"" + f.apiName() + "\"")
                         .collect(Collectors.joining(", "));
 
+        boolean hasFormula = selected.stream().anyMatch(f -> f.fieldType() == FieldType.FORMULA);
+        if (hasFormula && !selected.isEmpty()) {
+            selectClause += ", data AS \"___record_data___\", name AS \"___record_name___\", owner_id AS \"___record_owner_id___\"";
+        }
+
         // WHERE clause
         StringBuilder whereSql = new StringBuilder("tenant_id = $1");
         if (q.whereClause() != null) {
@@ -178,6 +183,9 @@ public class DefaultQueryTranslator implements QueryTranslator {
     }
 
     private String fieldExpr(FieldDefinition f) {
+        if (f.fieldType() == FieldType.FORMULA) {
+            return "NULL";
+        }
         if (f.storageKind() == StorageKind.COLUMN) {
             return f.storageKey() != null ? f.storageKey() : f.apiName();
         }

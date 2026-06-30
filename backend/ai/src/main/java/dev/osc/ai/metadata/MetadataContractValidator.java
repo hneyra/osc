@@ -38,12 +38,38 @@ public class MetadataContractValidator {
 
     /** Returns the set of violations of the ObjectDefinition contract; empty means valid. */
     public Set<ValidationMessage> validateObject(JsonNode node) {
-        return objectSchema.validate(node);
+        Set<ValidationMessage> violations = objectSchema.validate(node);
+        if (!violations.isEmpty()) {
+            return violations;
+        }
+        if (node.has("fields") && node.get("fields").isArray()) {
+            for (JsonNode field : node.get("fields")) {
+                validateFormulaField(field);
+            }
+        }
+        return violations;
     }
 
     /** Returns the set of violations of the FieldDefinition contract; empty means valid. */
     public Set<ValidationMessage> validateField(JsonNode node) {
-        return fieldSchema.validate(node);
+        Set<ValidationMessage> violations = fieldSchema.validate(node);
+        if (!violations.isEmpty()) {
+            return violations;
+        }
+        validateFormulaField(node);
+        return violations;
+    }
+
+    private void validateFormulaField(JsonNode node) {
+        if (node.has("field_type") && "FORMULA".equals(node.get("field_type").asText())) {
+            JsonNode config = node.path("config");
+            if (config.has("formula")) {
+                String formula = config.get("formula").asText();
+                if (java.util.regex.Pattern.compile("\\b[a-zA-Z_][a-zA-Z0-9_]*\\.[a-zA-Z_]").matcher(formula).find()) {
+                    throw new IllegalArgumentException("Cross-object references in formulas are not allowed: " + formula);
+                }
+            }
+        }
     }
 
     /** Returns the set of violations of the ValidationRule contract; empty means valid. */

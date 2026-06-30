@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.io.InputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @DisplayName("MetadataContractValidator")
 class MetadataContractValidatorTest {
@@ -57,6 +58,24 @@ class MetadataContractValidatorTest {
         JsonNode bad = MAPPER.readTree("""
                 {"api_name":"industry__c","label":"Industry","field_type":"PICKLIST","storage_kind":"JSONB"}""");
         assertThat(validator.validateField(bad)).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("a valid FORMULA field is accepted")
+    void validFormulaAccepted() throws Exception {
+        JsonNode good = MAPPER.readTree("""
+                {"api_name":"discount__c","label":"Discount","field_type":"FORMULA","storage_kind":"JSONB",
+                 "config":{"formula":"amount * 0.1"}}""");
+        assertThat(validator.validateField(good)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a FORMULA field with cross-object references is rejected")
+    void crossObjectFormulaRejected() throws Exception {
+        JsonNode bad = MAPPER.readTree("""
+                {"api_name":"parent_name__c","label":"Parent Name","field_type":"FORMULA","storage_kind":"JSONB",
+                 "config":{"formula":"Account.Name"}}""");
+        assertThrows(IllegalArgumentException.class, () -> validator.validateField(bad));
     }
 
     private static JsonNode example(String resource) throws Exception {
