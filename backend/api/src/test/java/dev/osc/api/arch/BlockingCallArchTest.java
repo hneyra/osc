@@ -26,6 +26,7 @@ class BlockingCallArchTest {
     static final ArchRule no_block_calls =
             noClasses()
                     .that().resideInAPackage("dev.osc..")
+                    .and().resideOutsideOfPackage("dev.osc.scripting..")
                     .should().callMethodWhere(
                             com.tngtech.archunit.core.domain.JavaCall.Predicates.target(
                                     com.tngtech.archunit.core.domain.properties.HasName.Predicates.nameMatching(

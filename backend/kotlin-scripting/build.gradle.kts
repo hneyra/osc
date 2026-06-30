@@ -3,10 +3,12 @@ plugins {
     kotlin("jvm") version "2.2.21"
 }
 
+
 dependencies {
     implementation(project(":backend:metadata-engine"))
     implementation(project(":backend:persistence"))
     implementation(project(":backend:query-engine"))
+    implementation(project(":backend:security"))
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
     implementation("org.jetbrains.kotlin:kotlin-scripting-common")
     implementation("org.jetbrains.kotlin:kotlin-scripting-jvm")

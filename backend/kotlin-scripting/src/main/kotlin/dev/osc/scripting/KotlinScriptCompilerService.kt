@@ -3,6 +3,7 @@ package dev.osc.scripting
 import org.springframework.stereotype.Service
 import java.security.MessageDigest
 import java.util.UUID
+import dev.osc.scripting.api.ExecutionContext
 import kotlin.script.experimental.annotations.KotlinScript
 import kotlin.script.experimental.api.*
 import kotlin.script.experimental.host.toScriptSource
@@ -15,9 +16,10 @@ import kotlinx.coroutines.runBlocking
     fileExtension = "kts",
     compilationConfiguration = RestrictedScriptCompilationConfiguration::class
 )
-abstract class RestrictedScript
+abstract class RestrictedScript(val ctx: ExecutionContext)
 
 object RestrictedScriptCompilationConfiguration : ScriptCompilationConfiguration({
+    baseClass(RestrictedScript::class)
     jvm {
         // Expose only required dependencies from the current context
         dependenciesFromCurrentContext(wholeClasspath = true)
