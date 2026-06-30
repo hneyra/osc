@@ -19,6 +19,9 @@ public interface RecordRepository {
 
     Flux<RecordEntity> findByObjectId(UUID objectId, PageRequest page);
 
+    /** Finds all records of a specific object type that have a matching value for a field key in the data JSONB. */
+    Flux<RecordEntity> findByField(UUID objectId, String fieldKey, Object value);
+
     Mono<RecordEntity> update(RecordUpdateCommand cmd);
 
     /** Returns empty if the record does not exist or belongs to a different tenant. */

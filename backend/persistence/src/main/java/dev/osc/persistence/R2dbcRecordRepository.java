@@ -86,6 +86,24 @@ public class R2dbcRecordRepository implements RecordRepository {
     }
 
     @Override
+    public Flux<RecordEntity> findByField(UUID objectId, String fieldKey, Object value) {
+        return resolveTenantId().flatMapMany(tenantId -> {
+            String valStr = value != null ? value.toString() : null;
+            return client.sql("""
+                    SELECT id, tenant_id, object_id, name, owner_id, data::text, created_at, updated_at
+                    FROM record
+                    WHERE object_id = :objectId AND tenant_id = :tenantId AND data ->> :fieldKey = :value
+                    """)
+                    .bind("objectId", objectId)
+                    .bind("tenantId", tenantId)
+                    .bind("fieldKey", fieldKey)
+                    .bind("value", valStr)
+                    .map((row, meta) -> toEntity(row))
+                    .all();
+        });
+    }
+
+    @Override
     public Mono<RecordEntity> update(RecordUpdateCommand cmd) {
         return resolveTenantId().flatMap(tenantId -> {
             boolean hasPatch = cmd.dataPatch() != null && !cmd.dataPatch().isEmpty();
