@@ -249,9 +249,13 @@ class DefaultDynamicPersistenceServiceTest {
         @DisplayName("delegates to recordRepository.update with correct command")
         void delegatesToRepository() {
             UUID id = UUID.randomUUID();
+            UUID objectId = UUID.randomUUID();
             Map<String, Object> patch = Map.of("name", "Updated");
-            RecordEntity updated = entityFor(id, tenantId, UUID.randomUUID(), patch);
+            RecordEntity oldRecord = entityFor(id, tenantId, objectId, Map.of("name", "Old"));
+            RecordEntity updated = entityFor(id, tenantId, objectId, patch);
 
+            when(recordRepository.findById(id)).thenReturn(Mono.just(oldRecord));
+            when(metadataEngine.findFields(tenantId, objectId)).thenReturn(Flux.empty());
             when(recordRepository.update(any())).thenReturn(Mono.just(updated));
 
             StepVerifier.create(
@@ -278,6 +282,11 @@ class DefaultDynamicPersistenceServiceTest {
         @DisplayName("delegates to recordRepository.delete")
         void delegatesToRepository() {
             UUID id = UUID.randomUUID();
+            UUID objectId = UUID.randomUUID();
+            RecordEntity oldRecord = entityFor(id, tenantId, objectId, Map.of("name", "Old"));
+
+            when(recordRepository.findById(id)).thenReturn(Mono.just(oldRecord));
+            when(metadataEngine.findFields(tenantId, objectId)).thenReturn(Flux.empty());
             when(recordRepository.delete(id)).thenReturn(Mono.empty());
 
             StepVerifier.create(
