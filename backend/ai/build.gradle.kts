@@ -4,6 +4,9 @@ plugins {
 
 dependencies {
     implementation(project(":backend:metadata-engine"))
+    implementation(project(":backend:kotlin-scripting"))
+    implementation("org.jetbrains.kotlin:kotlin-scripting-common")
+    implementation("org.jetbrains.kotlin:kotlin-scripting-jvm")
     implementation("org.springframework.boot:spring-boot-autoconfigure")
     implementation("com.fasterxml.jackson.core:jackson-databind")
     // JSON Schema (Draft-07) validation of the metadata contracts in docs/contracts/
