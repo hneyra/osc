@@ -48,7 +48,7 @@ public class DefaultFieldCoercionEngine implements FieldCoercionEngine {
             case URL              -> coerceUrl(rawValue);
             case PHONE            -> coercePhone(rawValue);
             case LOOKUP, MASTER_DETAIL -> coerceLookup(rawValue);
-            case AUTO_NUMBER, FORMULA  ->
+            case AUTO_NUMBER, FORMULA, ROLLUP ->
                     CoercionResult.failure("Field '%s' is read-only".formatted(field.apiName()));
         };
     }
